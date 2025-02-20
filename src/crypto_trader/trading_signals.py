@@ -13,300 +13,647 @@ class SignalGenerator:
         self.telegram.set_signal_generator(self)  # TelegramNotifier'a referans ver
         
     def analyze_signals(self, df, symbol, timeframe):
-        """
-        Güçlü alım/satım sinyallerini tespit eder
-        """
-        # RSI kontrolü
-        rsi_signal = 0
-        current_rsi = df['RSI'].iloc[-1]
-        prev_rsi = df['RSI'].iloc[-2]
-        
-        if current_rsi < 30 or (current_rsi < 35 and current_rsi > prev_rsi):
-            rsi_signal = 1  # Aşırı satım - Alım fırsatı
-        elif current_rsi > 70 or (current_rsi > 65 and current_rsi < prev_rsi):
-            rsi_signal = -1  # Aşırı alım - Satım fırsatı
+        try:
+            # Teknik indikatörleri hesapla
+            rsi = self.calculate_rsi(df)
+            macd, signal, hist = self.calculate_macd(df)
+            bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(df)
+            adx = self.calculate_adx(df)
             
-        # MACD kontrolü
-        macd = df['MACD'].iloc[-1]
-        signal = df['MACD_Signal'].iloc[-1]
-        prev_macd = df['MACD'].iloc[-2]
-        macd_signal = 1 if macd > signal and macd > prev_macd else -1 if macd < signal and macd < prev_macd else 0
-        
-        # Bollinger Bands kontrolü
-        price = df['close'].iloc[-1]
-        prev_price = df['close'].iloc[-2]
-        upper_band = df['BB_upper'].iloc[-1]
-        lower_band = df['BB_lower'].iloc[-1]
-        bb_signal = 1 if price < lower_band or (price < lower_band * 1.02 and price > prev_price) else -1 if price > upper_band or (price > upper_band * 0.98 and price < prev_price) else 0
-        
-        # Trend kontrolü
-        ma20 = df['close'].rolling(window=20).mean().iloc[-1]
-        ma50 = df['close'].rolling(window=50).mean().iloc[-1]
-        trend = 1 if price > ma20 and ma20 > ma50 else -1 if price < ma20 and ma20 < ma50 else 0
-        
-        # ADX değerini al
-        adx = df['ADX'].iloc[-1]
-        
-        # Güçlü sinyal tespiti
-        strong_signal = False
-        signal_type = "BEKLE"
-        confidence = 0
-        
-        # Alım sinyali koşulları
-        if (rsi_signal == 1 and (macd_signal == 1 or bb_signal == 1)) or \
-           (macd_signal == 1 and bb_signal == 1 and trend == 1):
-            strong_signal = True
-            signal_type = "AL"
+            current_price = df['close'].iloc[-1]
+            current_rsi = rsi.iloc[-1]
+            current_hist = hist.iloc[-1]
+            current_adx = adx.iloc[-1]
             
-            # Temel güven skoru hesaplama
-            confidence = 70  # Başlangıç skoru
+            # Trend yönünü belirle
+            trend = self.determine_trend(df, macd, signal)
             
-            # İndikatör bazlı güven artışı
-            if rsi_signal == 1:  # RSI uyumlu
-                confidence += 5
-            if macd_signal == 1:  # MACD uyumlu
-                confidence += 5
-            if bb_signal == 1:  # BB uyumlu
-                confidence += 5
-            if trend == 1:  # Trend uyumlu
-                confidence += 5
-            
-            # Trend gücü bonus
-            if adx > 25:  # Güçlü trend
-                confidence += 10
-            
-            # Volume analizi
-            volume_change = df['volume'].pct_change().iloc[-1]
-            if volume_change > 0.5:  # Volume artışı
-                confidence += 5
-            
-        # Satım sinyali koşulları
-        elif (rsi_signal == -1 and (macd_signal == -1 or bb_signal == -1)) or \
-             (macd_signal == -1 and bb_signal == -1 and trend == -1):
-            strong_signal = True
-            signal_type = "SAT"
-            
-            # Temel güven skoru hesaplama
-            confidence = 70  # Başlangıç skoru
-            
-            # İndikatör bazlı güven artışı
-            if rsi_signal == -1:
-                confidence += 5
-            if macd_signal == -1:
-                confidence += 5
-            if bb_signal == -1:
-                confidence += 5
-            if trend == -1:
-                confidence += 5
-            
-            # Trend gücü bonus
-            if adx > 25:
-                confidence += 10
-            
-            # Volume analizi
-            volume_change = df['volume'].pct_change().iloc[-1]
-            if volume_change > 0.5:
-                confidence += 5
-            
-        # Model boost'u uygula
-        if strong_signal:
-            # Adaptif güven skoru hesapla
-            model_boost = self.adaptive_trader.get_signal_confidence(df)
-            confidence = min(98, confidence * model_boost)  # Maximum 98
-            
-            # Güven skoru detaylarını logla
-            print(f"\nGüven Skoru Detayları - {symbol}:")
-            print(f"RSI: {current_rsi:.1f} ({'Uyumlu' if rsi_signal != 0 else 'Nötr'})")
-            print(f"MACD: {macd:.1f} ({'Uyumlu' if macd_signal != 0 else 'Nötr'})")
-            print(f"BB: {'Uyumlu' if bb_signal != 0 else 'Nötr'}")
-            print(f"Trend: {'Yukarı' if trend == 1 else 'Aşağı' if trend == -1 else 'Nötr'}")
-            print(f"ADX: {adx:.1f} ({'Güçlü' if adx > 25 else 'Zayıf'})")
-            print(f"Volume Değişimi: %{volume_change*100:.1f}")
-            print(f"Model Boost: x{model_boost:.2f}")
-            print(f"Final Güven Skoru: %{confidence:.1f}")
-        else:
-            print(f"\n⚠️ Zayıf Sinyal - {symbol}")
-        
-        # Signal data güncelleme
-        signal_data = {
-            'timestamp': datetime.now(),
-            'price': price,
-            'signal': signal_type,
-            'strong_signal': strong_signal,
-            'confidence': confidence,
-            'indicators': {
-                'RSI': current_rsi,
-                'MACD': macd,
-                'MACD_Signal': signal,
-                'BB_Upper': upper_band,
-                'BB_Lower': lower_band,
-                'MA20': ma20,
-                'MA50': ma50,
-                'ADX': adx,
-                'Volume_Change': df['volume'].pct_change().iloc[-1]
-            }
-        }
-        
-        # Başlangıçta should_exit'i False olarak tanımla
-        should_exit = False
-        exit_price = None
-        exit_reason = ""
-        profit_loss = 0
-        
-        # Önce çıkış sinyallerini kontrol et
-        if symbol in self.active_trades:
-            should_exit, exit_price, exit_reason = self.check_exit_signals(
-                df, 
-                self.active_trades[symbol]['signal'],
-                symbol  # symbol parametresini ekledik
+            # Sinyal koşulları - Düzeltilmiş mantık
+            signal_type = self.generate_signal(
+                trend=trend,
+                rsi=current_rsi,
+                macd_hist=current_hist,
+                price=current_price,
+                bb_lower=bb_lower.iloc[-1],
+                bb_upper=bb_upper.iloc[-1],
+                adx=current_adx
             )
             
-            if should_exit:
-                entry_price = self.active_trades[symbol]['price']
-                profit_loss = ((exit_price - entry_price) / entry_price) * 100 if self.active_trades[symbol]['signal'] == "AL" \
-                             else ((entry_price - exit_price) / entry_price) * 100
+            if signal_type:
+                # Temel güven oranını hesapla
+                confidence = self.calculate_confidence(
+                    trend=trend,
+                    rsi=current_rsi,
+                    macd_hist=current_hist,
+                    adx=current_adx,
+                    signal_type=signal_type
+                )
                 
-                exit_data = {
-                    'entry_price': entry_price,
-                    'price': exit_price,
-                    'profit_loss': profit_loss,
-                    'message': exit_reason
+                # Model boost ve istatistikleri hesapla
+                indicators = {
+                    "rsi": current_rsi,
+                    "macd": {
+                        "histogram": current_hist,
+                        "trend": "Yukarı kesişim" if current_hist > 0 else "Aşağı kesişim"
+                    },
+                    "bollinger": {
+                        "position": self.get_bb_position(current_price, bb_upper.iloc[-1], bb_lower.iloc[-1]),
+                        "width": (bb_upper.iloc[-1] - bb_lower.iloc[-1]) / bb_middle.iloc[-1]
+                    },
+                    "trend": trend,
+                    "adx": current_adx
                 }
                 
-                # Çıkış sinyali gönder
-                self.telegram.send_exit_signal(symbol, timeframe, exit_data)
+                model_boost = self.adaptive_trader.calculate_model_boost(symbol, indicators)
+                stats = self.adaptive_trader.get_trade_statistics(symbol)
                 
-                # Aktif işlemi kaldır
-                del self.active_trades[symbol]
-                
-                # İşlem sonucunu adaptive trader'a gönder
-                trade_data = {
-                    'data': df,
-                    'profit_loss': profit_loss,
-                    'entry_signal': self.active_trades[symbol]['signal'],
-                    'exit_reason': exit_reason,
-                    'timeframe': timeframe
+                signal_data = {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "signal": signal_type,
+                    "price": current_price,
+                    "confidence": confidence,
+                    "model_boost": model_boost,
+                    "adjusted_confidence": min(95, confidence + model_boost),
+                    "indicators": indicators,
+                    "statistics": stats
                 }
-                self.adaptive_trader.add_trade_result(trade_data)
-        
-        # Aktif işlem yoksa ve güçlü sinyal varsa giriş sinyali gönder
-        if strong_signal and symbol not in self.active_trades:
-            last_signal = self.last_signals.get(symbol, {})
-            current_time = datetime.now()
-            
-            # Son sinyal zamanını kontrol et
-            last_signal_time = last_signal.get('timestamp')
-            min_time_between_signals = timedelta(hours=1)  # En az 1 saat bekle
-            
-            # Eğer son sinyal yoksa veya yeterli süre geçtiyse ve sinyal farklıysa
-            if (not last_signal_time or 
-                current_time - last_signal_time > min_time_between_signals) and \
-                last_signal.get('signal') != signal_type:
+                
+                # Son sinyali sakla
+                self.last_signals[symbol] = signal_data
                 
                 # Telegram bildirimi gönder
-                self.telegram.send_signal(symbol, timeframe, signal_data)
+                message = self.format_signal_message(signal_data)
+                self.telegram.send_message(message)
                 
-                # Aktif işlemi kaydet
-                self.active_trades[symbol] = {
-                    'signal': signal_type,
-                    'price': price,
-                    'timestamp': current_time
-                }
+                return signal_data
                 
-                # Son sinyali güncelle
-                self.last_signals[symbol] = signal_data
+        except Exception as e:
+            print(f"Sinyal analiz hatası: {str(e)}")
+        return None
+
+    def format_signal_message(self, signal_data):
+        """
+        Sinyal mesajını formatla
+        """
+        symbol = signal_data["symbol"].replace("/", "")
+        confidence = signal_data["adjusted_confidence"]
+        model_boost = signal_data["model_boost"]
+        stats = signal_data["statistics"]
+        adx = signal_data["indicators"]["adx"]
         
-        return signal_data
+        # Dinamik hedefleri hesapla
+        initial_stop = 2.0  # Başlangıç stop-loss
         
+        # ADX'e göre hedefleri ayarla
+        if adx > 35:  # Çok güçlü trend
+            target_levels = [3.0, 5.0, 8.0, 10.0]
+            trail_levels = [1.2, 1.8, 2.4, 3.0]
+        elif adx > 25:  # Güçlü trend
+            target_levels = [2.5, 4.0, 6.0, 8.0]
+            trail_levels = [1.0, 1.5, 2.0, 2.5]
+        else:  # Normal trend
+            target_levels = [2.0, 3.0, 4.0, 5.0]
+            trail_levels = [0.8, 1.2, 1.6, 2.0]
+        
+        message = f"""💪 GÜÇLÜ SİNYAL - {symbol} ({signal_data['timeframe']})
+
+Sinyal: {signal_data['signal']}
+Fiyat: {signal_data['price']:.3f}
+Güven: %{confidence:.1f} (Model boost: +{model_boost}%)
+
+📊 Trend Analizi:
+RSI: {signal_data['indicators']['rsi']:.2f}
+MACD: {signal_data['indicators']['macd']['trend']}
+BB: {signal_data['indicators']['bollinger']['position']}
+Trend: {signal_data['indicators']['trend']}
+ADX: {adx:.1f} (Güçlü Trend)
+
+💰 Dinamik Hedefler:
+İlk Stop: %{initial_stop:.1f}
+
+🎯 Kar Alma Seviyeleri:
+1️⃣ %{target_levels[0]:.1f} → Stop: %{trail_levels[0]:.1f}
+2️⃣ %{target_levels[1]:.1f} → Stop: %{trail_levels[1]:.1f}
+3️⃣ %{target_levels[2]:.1f} → Stop: %{trail_levels[2]:.1f}
+4️⃣ %{target_levels[3]:.1f} → Stop: %{trail_levels[3]:.1f}
+
+⚠️ Not: Trailing stop seviyeleri otomatik ayarlanacak
+
+📈 Model İstatistikleri:
+Toplam İşlem: {stats['total_trades']}
+Başarı Oranı: %{stats['success_rate']:.1f}
+Benzer Pattern Başarısı: %{stats['pattern_success']:.1f}
+"""
+        return message
+
+    def generate_signal(self, trend, rsi, macd_hist, price, bb_lower, bb_upper, adx):
+        """
+        Geliştirilmiş sinyal üretme mantığı
+        """
+        # Hacim analizi
+        volume_data = self.analyze_volume_patterns(df)
+        
+        # Destek/Direnç seviyeleri
+        support, resistance = self.find_support_resistance(df)
+        
+        # Çoklu zaman dilimi analizi
+        mtf_analysis = self.analyze_multiple_timeframes(symbol, timeframe)
+        
+        # Mum formasyonları
+        patterns = self.detect_candlestick_patterns(df)
+        
+        # Güçlü trend kontrolü (ADX > 25)
+        strong_trend = adx > 25
+        
+        # ALIŞ Sinyali için ek koşullar
+        if (
+            # Mevcut koşullar...
+            (trend == "Yukarı" or not strong_trend) and
+            rsi < 35 and rsi > 25 and
+            macd_hist > 0 and
+            price > bb_lower and price < (bb_lower * 1.02) and
+            
+            # Yeni koşullar
+            volume_data['volume_confirms'] and
+            volume_data['avg_volume_ratio'] > 1.2 and
+            support is not None and price < support * 1.02 and
+            mtf_analysis['alignment'] > 0.6 and
+            (patterns['hammer'] or patterns['engulfing'])
+        ):
+            return "AL"
+            
+        # SATIŞ Sinyali Koşulları    
+        elif (
+            # Aşağı trend VEYA trend zayıf
+            (trend == "Aşağı" or not strong_trend) and
+            # RSI aşırı alım bölgesinden dönüyor
+            rsi > 65 and rsi < 75 and
+            # MACD histogramı negatife dönüyor
+            macd_hist < 0 and
+            # Fiyat üst BB'ye yakın ama kırmamış
+            price < bb_upper and price > (bb_upper * 0.98)
+        ):
+            return "SAT"
+            
+        return None
+
+    def determine_trend(self, df, macd, signal):
+        """
+        Trend belirleme - birden fazla göstergeye bakarak
+        """
+        # Son 20 mum için EMA hesapla
+        ema20 = df['close'].ewm(span=20).mean()
+        
+        # Son değerleri al
+        current_price = df['close'].iloc[-1]
+        current_ema = ema20.iloc[-1]
+        
+        # MACD trend yönü
+        macd_trend = "Yukarı" if macd.iloc[-1] > signal.iloc[-1] else "Aşağı"
+        
+        # Fiyat EMA üzerinde ve MACD yukarı ise güçlü yukarı trend
+        if current_price > current_ema and macd_trend == "Yukarı":
+            return "Yukarı"
+        # Fiyat EMA altında ve MACD aşağı ise güçlü aşağı trend    
+        elif current_price < current_ema and macd_trend == "Aşağı":
+            return "Aşağı"
+        else:
+            return "Yatay"
+
+    def calculate_confidence(self, trend, rsi, macd_hist, adx, signal_type):
+        """
+        Sinyal güven oranı hesaplama - düzeltilmiş
+        """
+        confidence = 50  # Başlangıç değeri
+        
+        # Trend teyidi
+        if signal_type == "AL" and trend == "Yukarı":
+            confidence += 15
+        elif signal_type == "SAT" and trend == "Aşağı":
+            confidence += 15
+            
+        # RSI teyidi
+        if signal_type == "AL" and 30 <= rsi <= 40:
+            confidence += 10
+        elif signal_type == "SAT" and 60 <= rsi <= 70:
+            confidence += 10
+            
+        # MACD teyidi
+        if (signal_type == "AL" and macd_hist > 0) or (signal_type == "SAT" and macd_hist < 0):
+            confidence += 10
+            
+        # ADX teyidi
+        if adx > 25:
+            confidence += 10
+        if adx > 35:
+            confidence += 5
+            
+        return min(confidence, 95)  # Maximum 95% güven
+
+    def calculate_rsi(self, df):
+        # RSI hesaplama işlemi
+        # Bu işlemi gerçekleştirmek için gerekli kodu buraya ekleyin
+        # Bu örnekte, RSI hesaplama işlemi için pandas kullanılmıştır
+        return df['RSI']
+
+    def calculate_macd(self, df):
+        # MACD hesaplama işlemi
+        # Bu işlemi gerçekleştirmek için gerekli kodu buraya ekleyin
+        # Bu örnekte, MACD hesaplama işlemi için pandas kullanılmıştır
+        return df['MACD'], df['MACD_Signal'], df['MACD_Histogram']
+
+    def calculate_bollinger_bands(self, df):
+        # Bollinger Bands hesaplama işlemi
+        # Bu işlemi gerçekleştirmek için gerekli kodu buraya ekleyin
+        # Bu örnekte, Bollinger Bands hesaplama işlemi için pandas kullanılmıştır
+        return df['BB_upper'], df['BB_middle'], df['BB_lower']
+
+    def calculate_adx(self, df):
+        # ADX hesaplama işlemi
+        # Bu işlemi gerçekleştirmek için gerekli kodu buraya ekleyin
+        # Bu örnekte, ADX hesaplama işlemi için pandas kullanılmıştır
+        return df['ADX']
+
+    def get_bb_position(self, price, upper_band, lower_band):
+        # BB pozisyonu hesaplama işlemi
+        # Bu işlemi gerçekleştirmek için gerekli kodu buraya ekleyin
+        # Bu örnekte, BB pozisyonu hesaplama işlemi için basit bir mantık kullanılmıştır
+        if price < lower_band:
+            return "Altında"
+        elif price > upper_band:
+            return "Üstünde"
+        else:
+            return "Ortasında"
+
+    def on_trade_complete(self, symbol, entry_signal, success):
+        """
+        İşlem tamamlandığında sonucu kaydet
+        """
+        if symbol in self.last_signals:
+            pattern = self.last_signals[symbol]['indicators']
+            self.adaptive_trader.record_trade_result(symbol, pattern, success)
+
     def check_exit_signals(self, df, entry_signal, symbol):
         """
-        Çıkış sinyallerini kontrol eder
+        Dinamik çıkış sinyalleri ve trailing stop
         """
+        try:
+            current_price = df['close'].iloc[-1]
+            entry_price = self.active_trades[symbol]['price']
+            highest_price = self.active_trades[symbol].get('highest_price', entry_price)
+            lowest_price = self.active_trades[symbol].get('lowest_price', entry_price)
+            
+            # Trend göstergeleri
+            rsi = df['RSI'].iloc[-1]
+            adx = df['ADX'].iloc[-1]
+            macd = df['MACD'].iloc[-1]
+            macd_signal = df['MACD_Signal'].iloc[-1]
+            
+            if entry_signal == "AL":
+                # LONG pozisyon için
+                current_profit = ((current_price - entry_price) / entry_price) * 100
+                
+                # En yüksek fiyatı güncelle
+                if current_price > highest_price:
+                    highest_price = current_price
+                    self.active_trades[symbol]['highest_price'] = highest_price
+                
+                # Trailing stop hesapla
+                trailing_stop = self.calculate_trailing_stop(
+                    current_profit=current_profit,
+                    highest_price=highest_price,
+                    current_price=current_price,
+                    adx=adx
+                )
+                
+                # Trend zayıflama belirtileri
+                trend_weakening = self.detect_trend_weakness(
+                    rsi=rsi,
+                    macd=macd,
+                    macd_signal=macd_signal,
+                    adx=adx,
+                    df=df,
+                    position="LONG"
+                )
+                
+                # Çıkış koşulları
+                if current_price <= trailing_stop:
+                    trend_status = self.get_trend_status(rsi, macd, adx, df)
+                    self.send_position_update(
+                        symbol=symbol,
+                        current_price=current_price,
+                        current_profit=current_profit,
+                        trailing_stop=trailing_stop,
+                        trend_status=trend_status
+                    )
+                    return True, current_price, f"Trailing stop tetiklendi: %{current_profit:.2f}"
+                    
+                elif current_profit >= 5.0 and trend_weakening:
+                    trend_status = self.get_trend_status(rsi, macd, adx, df)
+                    self.send_position_update(
+                        symbol=symbol,
+                        current_price=current_price,
+                        current_profit=current_profit,
+                        trailing_stop=trailing_stop,
+                        trend_status=trend_status
+                    )
+                    return True, current_price, f"Trend zayıflıyor, kar realizasyonu: %{current_profit:.2f}"
+                    
+                elif current_profit <= -2.0:  # Sabit stop-loss
+                    trend_status = self.get_trend_status(rsi, macd, adx, df)
+                    self.send_position_update(
+                        symbol=symbol,
+                        current_price=current_price,
+                        current_profit=current_profit,
+                        trailing_stop=trailing_stop,
+                        trend_status=trend_status
+                    )
+                    return True, current_price, f"Stop-loss tetiklendi: %{current_profit:.2f}"
+                    
+            elif entry_signal == "SAT":
+                # SHORT pozisyon için
+                current_profit = ((entry_price - current_price) / entry_price) * 100
+                
+                # En düşük fiyatı güncelle
+                if current_price < lowest_price:
+                    lowest_price = current_price
+                    self.active_trades[symbol]['lowest_price'] = lowest_price
+                
+                # Trailing stop hesapla
+                trailing_stop = self.calculate_trailing_stop(
+                    current_profit=current_profit,
+                    lowest_price=lowest_price,
+                    current_price=current_price,
+                    adx=adx,
+                    position="SHORT"
+                )
+                
+                # Trend zayıflama belirtileri
+                trend_weakening = self.detect_trend_weakness(
+                    rsi=rsi,
+                    macd=macd,
+                    macd_signal=macd_signal,
+                    adx=adx,
+                    df=df,
+                    position="SHORT"
+                )
+                
+                # Çıkış koşulları
+                if current_price >= trailing_stop:
+                    trend_status = self.get_trend_status(rsi, macd, adx, df)
+                    self.send_position_update(
+                        symbol=symbol,
+                        current_price=current_price,
+                        current_profit=current_profit,
+                        trailing_stop=trailing_stop,
+                        trend_status=trend_status
+                    )
+                    return True, current_price, f"Trailing stop tetiklendi: %{current_profit:.2f}"
+                    
+                elif current_profit >= 5.0 and trend_weakening:
+                    trend_status = self.get_trend_status(rsi, macd, adx, df)
+                    self.send_position_update(
+                        symbol=symbol,
+                        current_price=current_price,
+                        current_profit=current_profit,
+                        trailing_stop=trailing_stop,
+                        trend_status=trend_status
+                    )
+                    return True, current_price, f"Trend zayıflıyor, kar realizasyonu: %{current_profit:.2f}"
+                    
+                elif current_profit <= -2.0:  # Sabit stop-loss
+                    trend_status = self.get_trend_status(rsi, macd, adx, df)
+                    self.send_position_update(
+                        symbol=symbol,
+                        current_price=current_price,
+                        current_profit=current_profit,
+                        trailing_stop=trailing_stop,
+                        trend_status=trend_status
+                    )
+                    return True, current_price, f"Stop-loss tetiklendi: %{current_profit:.2f}"
+                    
+            return False, current_price, ""
+            
+        except Exception as e:
+            print(f"Çıkış sinyali kontrolü hatası: {str(e)}")
+            return False, current_price, ""
+
+    def calculate_trailing_stop(self, current_profit, highest_price=None, lowest_price=None, 
+                              current_price=None, adx=None, position="LONG"):
+        """
+        Dinamik trailing stop hesaplama
+        """
+        if position == "LONG":
+            # Kar yüzdesine göre trailing stop mesafesi
+            if current_profit < 3.0:
+                trail_percentage = 1.0  # %1 trailing stop
+            elif current_profit < 5.0:
+                trail_percentage = 1.5  # %1.5 trailing stop
+            elif current_profit < 10.0:
+                trail_percentage = 2.0  # %2 trailing stop
+            else:
+                trail_percentage = 2.5  # %2.5 trailing stop
+            
+            # ADX'e göre trailing stop'u ayarla
+            if adx > 30:  # Güçlü trend
+                trail_percentage *= 1.2  # Biraz daha fazla boşluk ver
+            
+            return highest_price * (1 - trail_percentage/100)
+        
+        else:  # SHORT pozisyon
+            if current_profit < 3.0:
+                trail_percentage = 1.0
+            elif current_profit < 5.0:
+                trail_percentage = 1.5
+            elif current_profit < 10.0:
+                trail_percentage = 2.0
+            else:
+                trail_percentage = 2.5
+            
+            if adx > 30:
+                trail_percentage *= 1.2
+            
+            return lowest_price * (1 + trail_percentage/100)
+
+    def detect_trend_weakness(self, rsi, macd, macd_signal, adx, df, position="LONG"):
+        """
+        Trend zayıflama belirtilerini tespit et
+        """
+        weakness_points = 0
+        
+        if position == "LONG":
+            # RSI aşırı alım ve düşüş
+            if rsi > 70 and rsi < df['RSI'].iloc[-2]:
+                weakness_points += 1
+            
+            # MACD zayıflama
+            if macd < macd_signal and macd < df['MACD'].iloc[-2]:
+                weakness_points += 1
+            
+            # ADX zayıflama
+            if adx < 20 or (adx < df['ADX'].iloc[-2] and adx < df['ADX'].iloc[-3]):
+                weakness_points += 1
+            
+            # Fiyat momentum kaybı
+            if df['close'].iloc[-1] < df['close'].iloc[-2] < df['close'].iloc[-3]:
+                weakness_points += 1
+            
+        else:  # SHORT pozisyon
+            # RSI aşırı satım ve yükseliş
+            if rsi < 30 and rsi > df['RSI'].iloc[-2]:
+                weakness_points += 1
+            
+            # MACD zayıflama
+            if macd > macd_signal and macd > df['MACD'].iloc[-2]:
+                weakness_points += 1
+            
+            # ADX zayıflama
+            if adx < 20 or (adx < df['ADX'].iloc[-2] and adx < df['ADX'].iloc[-3]):
+                weakness_points += 1
+            
+            # Fiyat momentum kaybı
+            if df['close'].iloc[-1] > df['close'].iloc[-2] > df['close'].iloc[-3]:
+                weakness_points += 1
+            
+        return weakness_points >= 2  # En az 2 zayıflama belirtisi varsa True 
+
+    def send_position_update(self, symbol, current_price, current_profit, trailing_stop, trend_status):
+        """
+        Pozisyon güncellemelerini bildir
+        """
+        message = f"""📊 POZİSYON GÜNCELLEMESİ - {symbol}
+
+💵 Mevcut Fiyat: {current_price:.3f}
+📈 Kar/Zarar: %{current_profit:.2f}
+🛡️ Trailing Stop: {trailing_stop:.3f}
+
+⚡ Trend Durumu:
+{trend_status}
+"""
+        self.telegram.send_message(message)
+
+    def get_trend_status(self, rsi, macd, adx, df):
+        if adx > 35:
+            return "Çok Güçlü Trend"
+        elif adx > 25:
+            return "Güçlü Trend"
+        else:
+            return "Normal Trend"
+
+    def analyze_volume_patterns(self, df):
+        """
+        Hacim paternlerini analiz eder
+        """
+        volume = df['volume']
+        close = df['close']
+        
+        # Hacim ortalamaları
+        vol_sma20 = volume.rolling(20).mean()
+        vol_sma5 = volume.rolling(5).mean()
+        
+        # Hacim artışı kontrolü
+        volume_surge = volume.iloc[-1] > vol_sma20.iloc[-1] * 1.5
+        
+        # Fiyat-Hacim uyumu
+        price_up = close.iloc[-1] > close.iloc[-2]
+        volume_up = volume.iloc[-1] > volume.iloc[-2]
+        
+        # Hacim teyidi
+        volume_confirms = (price_up and volume_up) or (not price_up and not volume_up)
+        
+        return {
+            'volume_surge': volume_surge,
+            'volume_confirms': volume_confirms,
+            'avg_volume_ratio': volume.iloc[-1] / vol_sma20.iloc[-1]
+        }
+
+    def find_support_resistance(self, df, lookback=100):
+        """
+        Önemli destek ve direnç seviyelerini belirler
+        """
+        highs = df['high'].iloc[-lookback:]
+        lows = df['low'].iloc[-lookback:]
+        
+        # Pivot noktaları
+        pivot_high = self.find_pivot_points(highs, 'high')
+        pivot_low = self.find_pivot_points(lows, 'low')
+        
         current_price = df['close'].iloc[-1]
         
-        # Trend gücünü hesapla
-        adx = df['ADX'].iloc[-1]
-        rsi = df['RSI'].iloc[-1]
-        macd = df['MACD'].iloc[-1]
-        macd_signal = df['MACD_Signal'].iloc[-1]
+        # En yakın seviyeleri bul
+        nearest_support = max([p for p in pivot_low if p < current_price], default=None)
+        nearest_resistance = min([p for p in pivot_high if p > current_price], default=None)
         
-        # Dinamik kar hedefi hesapla
-        if entry_signal == "AL":
-            # Long pozisyon için çıkış sinyalleri
-            entry_price = self.active_trades[symbol]['price']
-            current_profit = ((current_price - entry_price) / entry_price) * 100
+        return nearest_support, nearest_resistance
+
+    def find_pivot_points(self, series, type='high'):
+        """
+        Pivot noktalarını belirler
+        """
+        pivot_points = []
+        window = 5
+        
+        for i in range(window, len(series)-window):
+            if type == 'high':
+                if series.iloc[i] == max(series.iloc[i-window:i+window+1]):
+                    pivot_points.append(series.iloc[i])
+            else:
+                if series.iloc[i] == min(series.iloc[i-window:i+window+1]):
+                    pivot_points.append(series.iloc[i])
+                
+        return pivot_points
+
+    def analyze_multiple_timeframes(self, symbol, current_timeframe):
+        """
+        Farklı zaman dilimlerinde analiz yapar
+        """
+        timeframes = {
+            '15m': ['5m', '1h'],
+            '1h': ['15m', '4h'],
+            '4h': ['1h', '1d']
+        }
+        
+        if current_timeframe not in timeframes:
+            return None
+        
+        aligned_trends = 0
+        results = {}
+        
+        for tf in timeframes[current_timeframe]:
+            df = self.get_data_for_timeframe(symbol, tf)
+            trend = self.determine_trend(df)
+            results[tf] = trend
             
-            # Trend zayıflama belirtileri
-            trend_weakening = False
+            if trend == self.determine_trend(df):
+                aligned_trends += 1
             
-            # 1. RSI tepeden dönüş
-            if rsi > 70 or (rsi > 65 and rsi < df['RSI'].iloc[-2]):
-                trend_weakening = True
-            
-            # 2. MACD zayıflama
-            if macd < macd_signal and macd < df['MACD'].iloc[-2]:
-                trend_weakening = True
-            
-            # 3. ADX zayıflama
-            if adx < 20 or adx < df['ADX'].iloc[-2]:
-                trend_weakening = True
-            
-            # Kar hedefini dinamik ayarla
-            if adx > 25:  # Güçlü trend
-                target_profit = 5.0
-            elif adx > 20:  # Orta trend
-                target_profit = 3.0
-            else:  # Zayıf trend
-                target_profit = 2.0
-            
-            # Erken çıkış koşulları
-            if current_profit >= target_profit:
-                return True, current_price, f"Hedef kara ulaşıldı: %{current_profit:.2f}"
-            
-            elif current_profit >= target_profit * 0.7 and trend_weakening:
-                return True, current_price, f"Trend zayıflıyor, erken çıkış: %{current_profit:.2f}"
-            
-            # Stop-loss kontrolü
-            elif current_profit <= -2.0:  # %2 zarar
-                return True, current_price, f"Stop-loss tetiklendi: %{current_profit:.2f}"
-            
-        elif entry_signal == "SAT":
-            # Short pozisyon için çıkış sinyalleri
-            entry_price = self.active_trades[symbol]['price']
-            current_profit = ((entry_price - current_price) / entry_price) * 100
-            
-            # Trend zayıflama belirtileri
-            trend_weakening = False
-            
-            # 1. RSI dipten dönüş
-            if rsi < 30 or (rsi < 35 and rsi > df['RSI'].iloc[-2]):
-                trend_weakening = True
-            
-            # 2. MACD zayıflama
-            if macd > macd_signal and macd > df['MACD'].iloc[-2]:
-                trend_weakening = True
-            
-            # 3. ADX zayıflama
-            if adx < 20 or adx < df['ADX'].iloc[-2]:
-                trend_weakening = True
-            
-            # Kar hedefini dinamik ayarla
-            if adx > 25:  # Güçlü trend
-                target_profit = 5.0
-            elif adx > 20:  # Orta trend
-                target_profit = 3.0
-            else:  # Zayıf trend
-                target_profit = 2.0
-            
-            # Erken çıkış koşulları
-            if current_profit >= target_profit:
-                return True, current_price, f"Hedef kara ulaşıldı: %{current_profit:.2f}"
-            
-            elif current_profit >= target_profit * 0.7 and trend_weakening:
-                return True, current_price, f"Trend zayıflıyor, erken çıkış: %{current_profit:.2f}"
-            
-            # Stop-loss kontrolü
-            elif current_profit <= -2.0:  # %2 zarar
-                return True, current_price, f"Stop-loss tetiklendi: %{current_profit:.2f}"
-            
-        return False, current_price, "" 
+        return {
+            'timeframes': results,
+            'alignment': aligned_trends / len(timeframes[current_timeframe])
+        }
+
+    def detect_candlestick_patterns(self, df):
+        """
+        Mum formasyonlarını tespit eder
+        """
+        patterns = {
+            'hammer': self.is_hammer(df),
+            'engulfing': self.is_engulfing(df),
+            'doji': self.is_doji(df),
+            'morning_star': self.is_morning_star(df),
+            'evening_star': self.is_evening_star(df)
+        }
+        
+        return patterns
+
+    def is_hammer(self, df):
+        """
+        Çekiç formasyonu kontrolü
+        """
+        last_candle = df.iloc[-1]
+        body = abs(last_candle['open'] - last_candle['close'])
+        lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
+        upper_wick = last_candle['high'] - max(last_candle['open'], last_candle['close'])
+        
+        return lower_wick > body * 2 and upper_wick < body * 0.5 

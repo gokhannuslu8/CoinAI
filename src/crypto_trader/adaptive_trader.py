@@ -12,7 +12,9 @@ class AdaptiveTrader:
             max_depth=5,
             random_state=42
         )
-        self.trade_history = pd.DataFrame()
+        self.trade_history = {}  # Her sembol için işlem geçmişi
+        self.pattern_history = {}  # Benzer pattern'ların başarı oranı
+        self.min_trades_for_stats = 10  # İstatistik için minimum işlem sayısı
         self.min_samples = 50  # Minimum eğitim örneği sayısı
         
         # Trading results klasörünü oluştur
@@ -104,3 +106,101 @@ class AdaptiveTrader:
                 self.trade_history = json.load(f)
         except:
             self.trade_history = [] 
+
+    def calculate_model_boost(self, symbol, indicators):
+        """
+        Model boost değerini hesaplar
+        """
+        try:
+            # Pattern oluştur
+            current_pattern = self.create_pattern(indicators)
+            
+            # Benzer pattern'ların başarı oranını hesapla
+            pattern_success = self.get_pattern_success_rate(current_pattern)
+            
+            # Sembol bazlı başarı oranını hesapla
+            symbol_success = self.get_symbol_success_rate(symbol)
+            
+            # Model boost hesaplama
+            boost = 0
+            
+            if pattern_success > 0.6:  # %60'tan yüksek başarı
+                boost += (pattern_success - 0.6) * 20  # Max +8%
+                
+            if symbol_success > 0.5:  # %50'den yüksek başarı
+                boost += (symbol_success - 0.5) * 10  # Max +5%
+                
+            return round(boost, 1)
+            
+        except Exception as e:
+            print(f"Model boost hesaplama hatası: {str(e)}")
+            return 0
+            
+    def create_pattern(self, indicators):
+        """
+        Mevcut market durumundan bir pattern oluşturur
+        """
+        return {
+            'rsi_zone': self.get_rsi_zone(indicators['rsi']),
+            'trend': indicators['trend'],
+            'adx_strength': self.get_adx_strength(indicators['adx']),
+            'bb_position': indicators['bollinger']['position'],
+            'macd_trend': indicators['macd']['trend']
+        }
+        
+    def record_trade_result(self, symbol, pattern, success):
+        """
+        İşlem sonucunu kaydeder
+        """
+        # Sembol bazlı işlem geçmişi
+        if symbol not in self.trade_history:
+            self.trade_history[symbol] = []
+        self.trade_history[symbol].append(success)
+        
+        # Pattern bazlı işlem geçmişi
+        pattern_key = str(pattern)
+        if pattern_key not in self.pattern_history:
+            self.pattern_history[pattern_key] = []
+        self.pattern_history[pattern_key].append(success)
+        
+    def get_trade_statistics(self, symbol):
+        """
+        İşlem istatistiklerini döndürür
+        """
+        stats = {
+            'total_trades': 0,
+            'success_rate': 0,
+            'pattern_success': 0
+        }
+        
+        # Sembol bazlı istatistikler
+        if symbol in self.trade_history:
+            trades = self.trade_history[symbol]
+            stats['total_trades'] = len(trades)
+            if trades:
+                stats['success_rate'] = round((sum(trades) / len(trades)) * 100, 1)
+                
+        return stats
+        
+    def get_pattern_success_rate(self, pattern):
+        """
+        Benzer pattern'ların başarı oranını hesaplar
+        """
+        pattern_key = str(pattern)
+        if pattern_key in self.pattern_history:
+            results = self.pattern_history[pattern_key]
+            if len(results) >= 5:  # En az 5 benzer işlem
+                return sum(results) / len(results)
+        return 0.5  # Varsayılan oran
+        
+    @staticmethod
+    def get_rsi_zone(rsi):
+        if rsi < 30: return 'oversold'
+        if rsi > 70: return 'overbought'
+        return 'neutral'
+        
+    @staticmethod
+    def get_adx_strength(adx):
+        if adx > 35: return 'strong'
+        if adx > 25: return 'moderate'
+        return 'weak' 
