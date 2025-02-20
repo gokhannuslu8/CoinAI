@@ -1,6 +1,9 @@
 from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 import numpy as np
+import os
+import json
+from datetime import datetime
 
 class AdaptiveTrader:
     def __init__(self):
@@ -11,6 +14,22 @@ class AdaptiveTrader:
         )
         self.trade_history = pd.DataFrame()
         self.min_samples = 50  # Minimum eğitim örneği sayısı
+        
+        # Trading results klasörünü oluştur
+        self.results_dir = "trading_results"
+        if not os.path.exists(self.results_dir):
+            os.makedirs(self.results_dir)
+        
+        # Bugünün tarihiyle dosya adı oluştur
+        self.current_date = datetime.now().strftime('%Y%m%d')
+        self.results_file = f"{self.results_dir}/trades_{self.current_date}.json"
+        
+        # Eğer dosya yoksa boş bir işlem geçmişiyle başlat
+        if not os.path.exists(self.results_file):
+            self.trade_history = []
+            self.save_trade_history()
+        else:
+            self.load_trade_history()
         
     def prepare_features(self, data):
         """İndikatörlerden özellikler oluştur"""
@@ -25,18 +44,30 @@ class AdaptiveTrader:
         }
         
     def add_trade_result(self, trade_data):
-        """İşlem sonucunu kaydet"""
-        features = self.prepare_features(trade_data['data'])
-        result = 1 if trade_data['profit_loss'] > 0 else 0
+        """
+        Yeni işlem sonucunu kaydet
+        """
+        trade_result = {
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'symbol': trade_data.get('symbol'),
+            'timeframe': trade_data.get('timeframe'),
+            'entry_price': trade_data.get('entry_price'),
+            'exit_price': trade_data.get('price'),
+            'profit_loss': trade_data.get('profit_loss'),
+            'entry_signal': trade_data.get('entry_signal'),
+            'exit_reason': trade_data.get('exit_reason'),
+            'indicators': {
+                'RSI': trade_data['data']['RSI'].iloc[-1],
+                'MACD': trade_data['data']['MACD'].iloc[-1],
+                'ADX': trade_data['data']['ADX'].iloc[-1]
+            }
+        }
         
-        new_data = pd.DataFrame({
-            'features': [features],
-            'result': result,
-            'profit_loss': trade_data['profit_loss']
-        })
+        self.trade_history.append(trade_result)
+        self.save_trade_history()
         
-        self.trade_history = pd.concat([self.trade_history, new_data])
-        self._update_model()
+        print(f"\n💾 İşlem kaydedildi - {trade_result['symbol']}")
+        print(f"Kar/Zarar: %{trade_result['profit_loss']:.2f}")
         
     def _update_model(self):
         """Modeli güncelle"""
@@ -59,4 +90,17 @@ class AdaptiveTrader:
         
         # 0.5-1.0 arasını 0.8-1.2 aralığına dönüştür
         scaled_confidence = 0.8 + (confidence - 0.5) * 0.8
-        return max(0.5, min(1.2, scaled_confidence)) 
+        return max(0.5, min(1.2, scaled_confidence))
+
+    def save_trade_history(self):
+        """İşlem geçmişini JSON dosyasına kaydet"""
+        with open(self.results_file, 'w') as f:
+            json.dump(self.trade_history, f, indent=4)
+
+    def load_trade_history(self):
+        """İşlem geçmişini JSON dosyasından yükle"""
+        try:
+            with open(self.results_file, 'r') as f:
+                self.trade_history = json.load(f)
+        except:
+            self.trade_history = [] 

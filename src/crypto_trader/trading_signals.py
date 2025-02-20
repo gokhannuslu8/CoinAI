@@ -44,7 +44,7 @@ class SignalGenerator:
         ma50 = df['close'].rolling(window=50).mean().iloc[-1]
         trend = 1 if price > ma20 and ma20 > ma50 else -1 if price < ma20 and ma20 < ma50 else 0
         
-        # ADX değerini başta al
+        # ADX değerini al
         adx = df['ADX'].iloc[-1]
         
         # Güçlü sinyal tespiti
@@ -57,30 +57,39 @@ class SignalGenerator:
            (macd_signal == 1 and bb_signal == 1 and trend == 1):
             strong_signal = True
             signal_type = "AL"
-            # Temel güven skoru
+            
+            # Temel güven skoru hesaplama
             confidence = 70  # Başlangıç skoru
             
-            # Güven skoru artırıcıları
-            if rsi_signal == 1:
+            # İndikatör bazlı güven artışı
+            if rsi_signal == 1:  # RSI uyumlu
                 confidence += 5
-            if macd_signal == 1:
+            if macd_signal == 1:  # MACD uyumlu
                 confidence += 5
-            if bb_signal == 1:
+            if bb_signal == 1:  # BB uyumlu
                 confidence += 5
-            if trend == 1:
+            if trend == 1:  # Trend uyumlu
                 confidence += 5
+            
+            # Trend gücü bonus
             if adx > 25:  # Güçlü trend
                 confidence += 10
+            
+            # Volume analizi
+            volume_change = df['volume'].pct_change().iloc[-1]
+            if volume_change > 0.5:  # Volume artışı
+                confidence += 5
             
         # Satım sinyali koşulları
         elif (rsi_signal == -1 and (macd_signal == -1 or bb_signal == -1)) or \
              (macd_signal == -1 and bb_signal == -1 and trend == -1):
             strong_signal = True
             signal_type = "SAT"
-            # Temel güven skoru
+            
+            # Temel güven skoru hesaplama
             confidence = 70  # Başlangıç skoru
             
-            # Güven skoru artırıcıları
+            # İndikatör bazlı güven artışı
             if rsi_signal == -1:
                 confidence += 5
             if macd_signal == -1:
@@ -89,36 +98,34 @@ class SignalGenerator:
                 confidence += 5
             if trend == -1:
                 confidence += 5
-            if adx > 25:  # Güçlü trend
-                confidence += 10
-        
-        # Güven skoru eşikleri - daha esnek
-        MIN_CONFIDENCE_THRESHOLD = 70  # Minimum giriş için güven skoru (85'ten 70'e düşürdük)
-        STRONG_CONFIDENCE_THRESHOLD = 85  # Çok güçlü sinyal eşiği (92'den 85'e düşürdük)
-        
-        # Güven skoruna göre sinyal gücünü belirle
-        if confidence >= MIN_CONFIDENCE_THRESHOLD:
-            strong_signal = True
             
-            # Sinyal gücüne göre mesaj ekle
-            if confidence >= STRONG_CONFIDENCE_THRESHOLD:
-                signal_strength = "💎 ÇOK GÜÇLÜ"
-                signal_data['signal_strength'] = "VERY_STRONG"
-            else:
-                signal_strength = "💪 GÜÇLÜ"
-                signal_data['signal_strength'] = "STRONG"
+            # Trend gücü bonus
+            if adx > 25:
+                confidence += 10
+            
+            # Volume analizi
+            volume_change = df['volume'].pct_change().iloc[-1]
+            if volume_change > 0.5:
+                confidence += 5
+            
+        # Model boost'u uygula
+        if strong_signal:
+            # Adaptif güven skoru hesapla
+            model_boost = self.adaptive_trader.get_signal_confidence(df)
+            confidence = min(98, confidence * model_boost)  # Maximum 98
             
             # Güven skoru detaylarını logla
             print(f"\nGüven Skoru Detayları - {symbol}:")
-            print(f"RSI Skoru: {current_rsi:.1f}")
-            print(f"MACD Skoru: {macd:.1f}")
-            print(f"BB Skoru: {bb_signal:.1f}")
-            print(f"Trend Skoru: {trend:.1f}")
-            print(f"Toplam Baz Skor: {confidence:.1f}")
-            print(f"Sinyal Gücü: {signal_strength}")
+            print(f"RSI: {current_rsi:.1f} ({'Uyumlu' if rsi_signal != 0 else 'Nötr'})")
+            print(f"MACD: {macd:.1f} ({'Uyumlu' if macd_signal != 0 else 'Nötr'})")
+            print(f"BB: {'Uyumlu' if bb_signal != 0 else 'Nötr'}")
+            print(f"Trend: {'Yukarı' if trend == 1 else 'Aşağı' if trend == -1 else 'Nötr'}")
+            print(f"ADX: {adx:.1f} ({'Güçlü' if adx > 25 else 'Zayıf'})")
+            print(f"Volume Değişimi: %{volume_change*100:.1f}")
+            print(f"Model Boost: x{model_boost:.2f}")
+            print(f"Final Güven Skoru: %{confidence:.1f}")
         else:
-            strong_signal = False
-            print(f"\n⚠️ Zayıf Sinyal - {symbol} (Güven: {confidence:.1f})")
+            print(f"\n⚠️ Zayıf Sinyal - {symbol}")
         
         # Signal data güncelleme
         signal_data = {
@@ -148,7 +155,11 @@ class SignalGenerator:
         
         # Önce çıkış sinyallerini kontrol et
         if symbol in self.active_trades:
-            should_exit, exit_price, exit_reason = self.check_exit_signals(df, self.active_trades[symbol]['signal'])
+            should_exit, exit_price, exit_reason = self.check_exit_signals(
+                df, 
+                self.active_trades[symbol]['signal'],
+                symbol  # symbol parametresini ekledik
+            )
             
             if should_exit:
                 entry_price = self.active_trades[symbol]['price']
@@ -205,16 +216,9 @@ class SignalGenerator:
                 # Son sinyali güncelle
                 self.last_signals[symbol] = signal_data
         
-        # Adaptif güven skoru hesapla
-        confidence_boost = self.adaptive_trader.get_signal_confidence(df)
-        
-        if strong_signal:
-            # Güven skorunu adaptif skorla güncelle
-            confidence = confidence * confidence_boost
-        
         return signal_data
         
-    def check_exit_signals(self, df, entry_signal):
+    def check_exit_signals(self, df, entry_signal, symbol):
         """
         Çıkış sinyallerini kontrol eder
         """
