@@ -13,54 +13,7 @@ class TelegramNotifier:
         """SignalGenerator referansını ayarla"""
         self.signal_generator = signal_generator
 
-    def send_signal(self, symbol, timeframe, signal_data):
-        """
-        Sinyal mesajını gönder
-        """
-        confidence = signal_data['confidence']
-        indicators = signal_data['indicators']
-        
-        # Model boost hesapla
-        base_confidence = 70 if confidence < 80 else 80
-        boost_percentage = ((confidence / base_confidence) - 1) * 100
-        
-        # Model istatistikleri
-        if self.signal_generator and self.signal_generator.adaptive_trader:
-            total_trades = len(self.signal_generator.adaptive_trader.trade_history)
-            success_rate = self._calculate_success_rate() if total_trades > 0 else 0
-            pattern_success = self._calculate_pattern_success(signal_data) if total_trades >= 10 else 0
-            model_stats = f"""
-📈 Model İstatistikleri:
-Toplam İşlem: {total_trades}
-Başarı Oranı: %{success_rate:.0f}
-Benzer Pattern Başarısı: %{pattern_success:.0f}"""
-        else:
-            model_stats = ""
-        
-        # Sinyal gücüne göre başlık
-        if signal_data.get('signal_strength') == "VERY_STRONG":
-            title = f"💎 ÇOK GÜÇLÜ SİNYAL - {symbol} ({timeframe})"
-        else:
-            title = f"💪 GÜÇLÜ SİNYAL - {symbol} ({timeframe})"
-        
-        message = f"""{title}
-
-Sinyal: {signal_data['signal']}
-Fiyat: {signal_data['price']:.2f}
-Güven: %{confidence:.0f} {"(Model boost: +%.0f%%)" % boost_percentage if boost_percentage > 0 else ""}
-
-📊 Trend Analizi:
-RSI: {indicators['RSI']:.2f}
-MACD: {"Yukarı kesişim" if indicators['MACD'] > indicators['MACD_Signal'] else "Aşağı kesişim"}
-BB: {"Alt bant yakını" if signal_data['signal'] == "AL" else "Üst bant yakını"}
-Trend: {"Yukarı" if signal_data['price'] > indicators['MA20'] else "Aşağı"}
-ADX: {indicators['ADX']:.1f} {"(Güçlü Trend)" if indicators['ADX'] > 25 else "(Zayıf Trend)"}
-
-💰 Hedefler:
-Stop Loss: %2.0
-Kar Hedefi: %{"5.0" if indicators['ADX'] > 25 else "3.0" if indicators['ADX'] > 20 else "2.0"}
-{model_stats}"""
-        
+    def send_message(self, message):
         try:
             self.bot.send_message(chat_id=self.chat_id, text=message)
             return True

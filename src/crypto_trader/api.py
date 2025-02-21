@@ -41,36 +41,56 @@ class TradingSignal(BaseModel):
     timeframes: Dict[str, dict]
 
 @app.post("/start_trading/{symbol}")
-async def start_trading(symbol: str, timeframes: str = "15m,1h,4h"):
+async def start_trading(symbol: str):
     """
-    Yeni bir coin için trading başlat
+    Tek bir coin için trading başlat
     """
     try:
-        if symbol in active_symbols:
-            return {"message": f"{symbol} zaten izleniyor"}
+        # Symbol'ü düzelt (BTCUSDT -> BTC/USDT)
+        if "USDT" in symbol:
+            formatted_symbol = f"{symbol[:-4]}/USDT"
+        else:
+            formatted_symbol = f"{symbol}/USDT"
             
-        # Trading başlat
-        collector = DataCollector(timeframes=timeframes.split(','))
-        historical_data = collector.get_multi_timeframe_data(symbol)
+        print(f"Trading başlatılıyor: {formatted_symbol}")
         
-        if not historical_data:
-            raise HTTPException(status_code=400, detail=f"{symbol} için veri alınamadı")
+        if formatted_symbol in active_symbols:
+            return {
+                "status": "warning",
+                "message": f"{formatted_symbol} zaten izleniyor"
+            }
             
-        trainer = ModelTrainer()
-        model = trainer.train(historical_data)
-        bot = TradingBot(model)
+        # Veri toplayıcı oluştur
+        collector = DataCollector()
+        historical_data = collector.get_multi_timeframe_data(formatted_symbol)
         
-        # Global değişkenlere ekle
-        trading_bots[symbol] = bot
-        active_symbols.add(symbol)
-        
-        # Background task olarak sinyal üretmeye başla
-        asyncio.create_task(generate_signals(symbol, timeframes))
-        
-        return {"message": f"{symbol} trading başlatıldı"}
-        
+        if historical_data:
+            # Trading bot ve sinyal üretici oluştur
+            signal_generators[formatted_symbol] = SignalGenerator()
+            active_symbols.add(formatted_symbol)
+            
+            # Sadece 1h timeframe için izleme başlat
+            asyncio.create_task(monitor_signals(formatted_symbol, '1h'))
+            
+            # İlk fiyat bilgisini al
+            current_price = collector.get_current_price(formatted_symbol)
+            
+            return {
+                "status": "success",
+                "message": f"{formatted_symbol} sinyalleri izleniyor",
+                "initial_data": {
+                    "price": current_price,
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+        else:
+            raise Exception(f"{formatted_symbol} için veri alınamadı")
+            
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 @app.get("/stop_trading/{symbol}")
 async def stop_trading(symbol: str):
@@ -89,11 +109,47 @@ async def get_signals(symbol: str):
     """
     Coin için son sinyalleri getir
     """
-    if symbol not in active_symbols:
-        raise HTTPException(status_code=404, detail=f"{symbol} izlenmiyor")
+    print(f"\n=== Sinyal İsteği Detayları ===")
+    print(f"İstenen sembol: {symbol}")
+    print(f"Aktif semboller: {active_symbols}")
+    print(f"Mevcut sinyaller: {list(latest_signals.keys())}")
+    
+    try:
+        # Önce coinin aktif olup olmadığını kontrol et
+        if symbol not in active_symbols:
+            print(f"HATA: {symbol} aktif semboller arasında değil!")
+            return {
+                "status": "error",
+                "message": f"{symbol} izlenmiyor",
+                "suggestion": "Coini izlemeye almak için /start_multiple_trading endpoint'ini kullanın"
+            }
         
-    with signal_lock:
-        return latest_signals.get(symbol, {"message": "Henüz sinyal yok"})
+        # Sinyal var mı kontrol et
+        with signal_lock:
+            signal_data = latest_signals.get(symbol)
+            print(f"Sinyal verisi: {signal_data}")
+            
+            if not signal_data:
+                print(f"UYARI: {symbol} için henüz sinyal üretilmemiş")
+                return {
+                    "status": "info",
+                    "message": f"{symbol} için henüz sinyal üretilmedi",
+                    "timestamp": datetime.now().isoformat(),
+                    "is_active": True
+                }
+            
+            return {
+                "status": "success",
+                "data": signal_data,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+    except Exception as e:
+        print(f"HATA: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 @app.get("/active_symbols")
 async def get_active_symbols():
@@ -117,77 +173,23 @@ async def get_recommended_coins(category: str = "major"):
         )
 
 @app.post("/start_multiple_trading")
-async def start_multiple_trading(category: str = "major", timeframe: str = "1h"):
+async def start_multiple_trading(category: str = "major", timeframes: str = "1h"):
     """
-    Bir kategorideki tüm coinler için sinyal izlemeyi başlat
+    Kategori bazında çoklu trading başlat
     """
     try:
         if category not in RECOMMENDED_COINS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Geçersiz kategori. Mevcut kategoriler: {list(RECOMMENDED_COINS.keys())}"
-            )
-        
-        # Önce veri toplayıcıyı oluştur
-        collector = DataCollector([timeframe])
+            return {"error": f"Geçersiz kategori. Mevcut kategoriler: {list(RECOMMENDED_COINS.keys())}"}
+            
         results = []
-        
         for symbol in RECOMMENDED_COINS[category]:
-            try:
-                # Önce veriyi kontrol et
-                data = collector.get_multi_timeframe_data(symbol)
-                if not data or timeframe not in data:
-                    results.append({
-                        symbol: {
-                            "status": "error",
-                            "message": f"{symbol} için veri alınamadı"
-                        }
-                    })
-                    continue
-                
-                # Coin zaten izleniyorsa, durumu bildir
-                if symbol in active_symbols:
-                    results.append({
-                        symbol: {
-                            "status": "warning",
-                            "message": f"{symbol} zaten izleniyor"
-                        }
-                    })
-                    continue
-                
-                # Yeni signal generator oluştur
-                signal_generator = SignalGenerator()
-                
-                # Global değişkenlere ekle
-                trading_bots[symbol] = signal_generator
-                active_symbols.add(symbol)
-                
-                # Background task olarak izlemeye başla
-                asyncio.create_task(monitor_signals(symbol, timeframe))
-                
-                results.append({
-                    symbol: {
-                        "status": "success",
-                        "message": f"{symbol} {timeframe} sinyalleri izleniyor",
-                        "initial_data": {
-                            "price": float(data[timeframe]['close'].iloc[-1]),
-                            "timestamp": datetime.now().isoformat()
-                        }
-                    }
-                })
-                
-            except Exception as e:
-                results.append({
-                    symbol: {
-                        "status": "error",
-                        "message": str(e)
-                    }
-                })
-        
+            result = await start_trading(symbol.replace("/", ""))
+            results.append({symbol: result})
+            
         return results
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"error": str(e)}
 
 @app.post("/watch_signals/{symbol}")
 async def watch_signals(symbol: str, timeframe: str = "1h"):
@@ -218,14 +220,19 @@ async def monitor_signals(symbol, timeframe):
     """
     Belirli bir coin için sinyalleri izler
     """
+    print(f"\n=== Monitor Başlatıldı ===")
+    print(f"Sembol: {symbol}")
+    print(f"Timeframe: {timeframe}")
+    
     try:
-        # Her sembol için bir SignalGenerator oluştur veya var olanı kullan
         if symbol not in signal_generators:
             signal_generators[symbol] = SignalGenerator()
             
         signal_generator = signal_generators[symbol]
         
         while True:
+            print(f"\n{symbol} için sinyal kontrolü yapılıyor...")
+            
             # Veriyi al
             collector = DataCollector()
             data = collector.get_multi_timeframe_data(symbol)
@@ -238,18 +245,24 @@ async def monitor_signals(symbol, timeframe):
                     try:
                         # Aynı signal generator'ı kullan
                         signal_data = signal_generator.analyze_signals(df, symbol, timeframe)
+                        print(f"Sinyal analizi sonucu: {signal_data}")
                         
                         # Son sinyali sakla
                         if signal_data:
                             latest_signals[symbol] = signal_data
+                            print(f"Yeni sinyal kaydedildi: {signal_data}")
                             
                     except Exception as e:
-                        print(f"Sinyal analiz hatası ({symbol}): {str(e)}")
-                        
+                        print(f"Sinyal analiz hatası: {str(e)}")
+                else:
+                    print(f"HATA: {timeframe} verisi bulunamadı")
+            else:
+                print(f"HATA: {symbol} için veri alınamadı")
+                
             await asyncio.sleep(60)  # 1 dakika bekle
             
     except Exception as e:
-        print(f"Sinyal izleme hatası ({symbol}): {str(e)}")
+        print(f"Monitor hatası ({symbol}): {str(e)}")
 
 @app.post("/stop_all_trading")
 async def stop_all_trading():

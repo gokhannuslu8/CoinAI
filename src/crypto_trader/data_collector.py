@@ -5,9 +5,13 @@ import numpy as np
 from datetime import datetime, timedelta
 
 class DataCollector:
-    def __init__(self, timeframes=['15m', '1h', '4h']):
-        self.exchange = ccxt.binance()
-        self.timeframes = timeframes
+    def __init__(self):
+        self.exchange = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'future'
+            }
+        })
     
     def fetch_historical_data(self, symbol, timeframe='1h', limit=1000):
         """
@@ -137,29 +141,54 @@ class DataCollector:
                 print(f"Temel indikatör hesaplama hatası: {str(inner_e)}")
             return df
     
-    def get_multi_timeframe_data(self, symbol):
+    def get_current_price(self, symbol):
         """
-        Çoklu zaman dilimi verisi topla
+        Anlık fiyat bilgisini getir
+        """
+        try:
+            ticker = self.exchange.fetch_ticker(symbol)
+            return ticker['last']
+            
+        except Exception as e:
+            print(f"Fiyat alma hatası ({symbol}): {str(e)}")
+            # Son kapanış fiyatını al
+            data = self.get_multi_timeframe_data(symbol)
+            if data and '1h' in data:
+                return data['1h']['close'].iloc[-1]
+            return None
+            
+    def get_multi_timeframe_data(self, symbol, timeframes=['15m', '1h', '4h']):
+        """
+        Çoklu zaman dilimi verisi al
         """
         try:
             data = {}
-            for timeframe in self.timeframes:
-                df = self.fetch_historical_data(symbol, timeframe)
-                if df is not None and not df.empty:
-                    # Teknik indikatörleri hesapla
-                    df = self.add_indicators(df)
-                    data[timeframe] = df
-                else:
-                    print(f"Veri alınamadı: {symbol} - {timeframe}")
+            for timeframe in timeframes:
+                ohlcv = self.exchange.fetch_ohlcv(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    limit=1000
+                )
                 
-            if not data:
-                print(f"Hiçbir zaman dilimi için veri alınamadı: {symbol}")
-                return None
-            
+                df = pd.DataFrame(
+                    ohlcv,
+                    columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                )
+                
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+                
+                # Teknik indikatörleri hesapla
+                df['MA20'] = df['close'].rolling(window=20).mean()
+                df['MA50'] = df['close'].rolling(window=50).mean()
+                df['MA200'] = df['close'].rolling(window=200).mean()
+                
+                data[timeframe] = df
+                
             return data
             
         except Exception as e:
-            print(f"Veri toplama hatası ({symbol}): {e}")
+            print(f"Veri alma hatası ({symbol}): {str(e)}")
             return None
     
     def get_market_info(self, symbol):

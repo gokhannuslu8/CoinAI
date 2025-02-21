@@ -12,7 +12,19 @@ class AdaptiveTrader:
             max_depth=5,
             random_state=42
         )
-        self.trade_history = {}  # Her sembol için işlem geçmişi
+        self.trade_history = pd.DataFrame(columns=[
+            'symbol',
+            'entry_date',
+            'exit_date', 
+            'signal_type',  # AL/SAT
+            'entry_price',
+            'exit_price',
+            'profit_loss',  # Yüzdelik kar/zarar
+            'confidence',   # Sinyal güven skoru
+            'timeframe',
+            'indicators',   # Girişteki indikatör değerleri
+            'exit_reason'   # stop/target/trend_change
+        ])
         self.pattern_history = {}  # Benzer pattern'ların başarı oranı
         self.min_trades_for_stats = 10  # İstatistik için minimum işlem sayısı
         self.min_samples = 50  # Minimum eğitim örneği sayısı
@@ -108,29 +120,13 @@ class AdaptiveTrader:
             self.trade_history = [] 
 
     def calculate_model_boost(self, symbol, indicators):
-        """
-        Model boost değerini hesaplar
-        """
         try:
-            # Pattern oluştur
-            current_pattern = self.create_pattern(indicators)
+            # Başarı oranını al
+            success_rate = self.get_symbol_success_rate(symbol)  # Bu fonksiyon eksik
             
-            # Benzer pattern'ların başarı oranını hesapla
-            pattern_success = self.get_pattern_success_rate(current_pattern)
-            
-            # Sembol bazlı başarı oranını hesapla
-            symbol_success = self.get_symbol_success_rate(symbol)
-            
-            # Model boost hesaplama
-            boost = 0
-            
-            if pattern_success > 0.6:  # %60'tan yüksek başarı
-                boost += (pattern_success - 0.6) * 20  # Max +8%
-                
-            if symbol_success > 0.5:  # %50'den yüksek başarı
-                boost += (symbol_success - 0.5) * 10  # Max +5%
-                
-            return round(boost, 1)
+            # Model boost hesapla
+            boost = min(15, success_rate * 0.2)  # Maximum %15 boost
+            return boost
             
         except Exception as e:
             print(f"Model boost hesaplama hatası: {str(e)}")
@@ -165,22 +161,13 @@ class AdaptiveTrader:
         
     def get_trade_statistics(self, symbol):
         """
-        İşlem istatistiklerini döndürür
+        Sembol için istatistikleri getir
         """
-        stats = {
-            'total_trades': 0,
-            'success_rate': 0,
-            'pattern_success': 0
+        return {
+            "total_trades": len(self.trade_history),
+            "success_rate": 0,  # Henüz işlem yok
+            "pattern_success": 0  # Henüz pattern analizi yok
         }
-        
-        # Sembol bazlı istatistikler
-        if symbol in self.trade_history:
-            trades = self.trade_history[symbol]
-            stats['total_trades'] = len(trades)
-            if trades:
-                stats['success_rate'] = round((sum(trades) / len(trades)) * 100, 1)
-                
-        return stats
         
     def get_pattern_success_rate(self, pattern):
         """
@@ -203,4 +190,67 @@ class AdaptiveTrader:
     def get_adx_strength(adx):
         if adx > 35: return 'strong'
         if adx > 25: return 'moderate'
-        return 'weak' 
+        return 'weak'
+
+    def get_symbol_success_rate(self, symbol):
+        """
+        Sembol için başarı oranını hesapla
+        """
+        if len(self.trade_history) == 0:
+            return 0
+        
+        symbol_trades = self.trade_history[self.trade_history['symbol'] == symbol]
+        if len(symbol_trades) == 0:
+            return 0
+        
+        successful = len(symbol_trades[symbol_trades['profit'] > 0])
+        return (successful / len(symbol_trades)) * 100 
+
+    def record_trade(self, trade_data):
+        """
+        İşlem sonucunu kaydet
+        """
+        try:
+            # DataFrame'e ekle
+            self.trade_history = pd.concat([
+                self.trade_history,
+                pd.DataFrame([trade_data])
+            ])
+            
+            # JSON olarak kaydet
+            self.trade_history.to_json(self.results_file)
+            
+            # İstatistikleri güncelle
+            self.update_statistics(trade_data['symbol'])
+            
+            print(f"İşlem kaydedildi: {trade_data}")
+            
+        except Exception as e:
+            print(f"İşlem kayıt hatası: {str(e)}")
+            
+    def update_statistics(self, symbol):
+        """
+        Symbol bazlı istatistikleri güncelle
+        """
+        symbol_trades = self.trade_history[
+            self.trade_history['symbol'] == symbol
+        ]
+        
+        stats = {
+            'total_trades': len(symbol_trades),
+            'winning_trades': len(symbol_trades[symbol_trades['profit_loss'] > 0]),
+            'avg_profit': symbol_trades['profit_loss'].mean(),
+            'max_profit': symbol_trades['profit_loss'].max(),
+            'max_loss': symbol_trades['profit_loss'].min(),
+            'success_rate': len(symbol_trades[symbol_trades['profit_loss'] > 0]) / len(symbol_trades) * 100
+        }
+        
+        print(f"\n=== {symbol} İstatistikleri ===")
+        print(f"Toplam İşlem: {stats['total_trades']}")
+        print(f"Kazanan İşlem: {stats['winning_trades']}")
+        print(f"Ortalama Kar: %{stats['avg_profit']:.2f}")
+        print(f"En Yüksek Kar: %{stats['max_profit']:.2f}")
+        print(f"En Yüksek Zarar: %{stats['max_loss']:.2f}")
+        print(f"Başarı Oranı: %{stats['success_rate']:.1f}")
+        
+        return stats 
