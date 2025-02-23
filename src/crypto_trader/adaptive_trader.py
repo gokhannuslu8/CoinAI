@@ -211,19 +211,35 @@ class AdaptiveTrader:
         İşlem sonucunu kaydet
         """
         try:
-            # DataFrame'e ekle
-            self.trade_history = pd.concat([
-                self.trade_history,
-                pd.DataFrame([trade_data])
-            ])
+            # Mevcut kayıtları yükle
+            try:
+                with open(self.results_file, 'r') as f:
+                    trades = json.load(f)
+            except:
+                trades = []
             
-            # JSON olarak kaydet
-            self.trade_history.to_json(self.results_file)
+            # Yeni işlemi ekle
+            trades.append({
+                'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'symbol': trade_data['symbol'],
+                'signal_type': trade_data['signal_type'],
+                'entry_price': trade_data['entry_price'],
+                'exit_price': trade_data['exit_price'],
+                'profit_loss': trade_data['profit_loss'],
+                'confidence': trade_data['confidence'],
+                'timeframe': trade_data['timeframe'],
+                'indicators': trade_data['indicators'],
+                'exit_reason': trade_data['exit_reason']
+            })
+            
+            # Dosyaya kaydet
+            with open(self.results_file, 'w') as f:
+                json.dump(trades, f, indent=4)
+            
+            print(f"İşlem kaydedildi: {trade_data['symbol']} - {trade_data['profit_loss']:.2f}%")
             
             # İstatistikleri güncelle
             self.update_statistics(trade_data['symbol'])
-            
-            print(f"İşlem kaydedildi: {trade_data}")
             
         except Exception as e:
             print(f"İşlem kayıt hatası: {str(e)}")
@@ -232,25 +248,49 @@ class AdaptiveTrader:
         """
         Symbol bazlı istatistikleri güncelle
         """
-        symbol_trades = self.trade_history[
-            self.trade_history['symbol'] == symbol
-        ]
-        
-        stats = {
-            'total_trades': len(symbol_trades),
-            'winning_trades': len(symbol_trades[symbol_trades['profit_loss'] > 0]),
-            'avg_profit': symbol_trades['profit_loss'].mean(),
-            'max_profit': symbol_trades['profit_loss'].max(),
-            'max_loss': symbol_trades['profit_loss'].min(),
-            'success_rate': len(symbol_trades[symbol_trades['profit_loss'] > 0]) / len(symbol_trades) * 100
-        }
-        
-        print(f"\n=== {symbol} İstatistikleri ===")
-        print(f"Toplam İşlem: {stats['total_trades']}")
-        print(f"Kazanan İşlem: {stats['winning_trades']}")
-        print(f"Ortalama Kar: %{stats['avg_profit']:.2f}")
-        print(f"En Yüksek Kar: %{stats['max_profit']:.2f}")
-        print(f"En Yüksek Zarar: %{stats['max_loss']:.2f}")
-        print(f"Başarı Oranı: %{stats['success_rate']:.1f}")
-        
-        return stats 
+        try:
+            # Trade history bir liste olduğu için önce DataFrame'e çevirelim
+            df = pd.DataFrame(self.trade_history)
+            
+            # Symbol'e göre filtrele
+            symbol_trades = df[df['symbol'] == symbol]
+            
+            if len(symbol_trades) == 0:
+                return {
+                    'total_trades': 0,
+                    'winning_trades': 0,
+                    'avg_profit': 0,
+                    'max_profit': 0,
+                    'max_loss': 0,
+                    'success_rate': 0
+                }
+            
+            stats = {
+                'total_trades': len(symbol_trades),
+                'winning_trades': len(symbol_trades[symbol_trades['profit_loss'] > 0]),
+                'avg_profit': symbol_trades['profit_loss'].mean(),
+                'max_profit': symbol_trades['profit_loss'].max(),
+                'max_loss': symbol_trades['profit_loss'].min(),
+                'success_rate': (len(symbol_trades[symbol_trades['profit_loss'] > 0]) / len(symbol_trades)) * 100
+            }
+            
+            print(f"\n=== {symbol} İstatistikleri ===")
+            print(f"Toplam İşlem: {stats['total_trades']}")
+            print(f"Kazanan İşlem: {stats['winning_trades']}")
+            print(f"Ortalama Kar: %{stats['avg_profit']:.2f}")
+            print(f"En Yüksek Kar: %{stats['max_profit']:.2f}")
+            print(f"En Yüksek Zarar: %{stats['max_loss']:.2f}")
+            print(f"Başarı Oranı: %{stats['success_rate']:.1f}")
+            
+            return stats
+            
+        except Exception as e:
+            print(f"İstatistik güncelleme hatası: {str(e)}")
+            return {
+                'total_trades': 0,
+                'winning_trades': 0,
+                'avg_profit': 0,
+                'max_profit': 0,
+                'max_loss': 0,
+                'success_rate': 0
+            } 

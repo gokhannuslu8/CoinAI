@@ -1,0 +1,138 @@
+[
+    {
+        "date": "2025-02-23 12:56:38",
+        "symbol": "CAKE/USDT",
+        "signal_type": "AL",
+        "entry_price": 2.5669,
+        "exit_price": 2.5151,
+        "profit_loss": -2.017998363785113,
+        "confidence": 95,
+        "timeframe": "1h",
+        "indicators": {
+            "rsi": 48.107331097268734,
+            "macd": 0.005330480203760549,
+            "trend": "Yukar\u0131",
+            "adx": 43.721163662893694
+        },
+        "exit_reason": "Stop Loss tetiklendi"
+    },
+    {
+        "date": "2025-02-23 15:10:46",
+        "symbol": "GALA/USDT",
+        "signal_type": "AL",
+        "entry_price": 0.02321,
+        "exit_price": 0.02273,
+        "profit_loss": -2.0680741059888033,
+        "confidence": 85,
+        "timeframe": "1h",
+        "indicators": {
+            "rsi": 48.5436893203884,
+            "macd": 1.3086744487487597e-05,
+            "trend": "Yukar\u0131",
+            "adx": 21.11679567425673
+        },
+        "exit_reason": "Stop Loss tetiklendi"
+    },
+    {
+        "date": "2025-02-23 15:14:10",
+        "symbol": "DOT/USDT",
+        "signal_type": "AL",
+        "entry_price": 5.099,
+        "exit_price": 4.997,
+        "profit_loss": -2.0003922337713336,
+        "confidence": 85,
+        "timeframe": "1h",
+        "indicators": {
+            "rsi": 48.13559322033894,
+            "macd": 0.0036820081640968165,
+            "trend": "Yukar\u0131",
+            "adx": 17.822128700386255
+        },
+        "exit_reason": "Stop Loss tetiklendi"
+    },
+    {
+        "date": "2025-02-23 15:17:09",
+        "symbol": "MANA/USDT",
+        "signal_type": "AL",
+        "entry_price": 0.3203,
+        "exit_price": 0.3136,
+        "profit_loss": -2.091788947861375,
+        "confidence": 95,
+        "timeframe": "1h",
+        "indicators": {
+            "rsi": 49.20634920634915,
+            "macd": 0.0004416023035216575,
+            "trend": "Yukar\u0131",
+            "adx": 31.02144812841883
+        },
+        "exit_reason": "Stop Loss tetiklendi"
+    },
+    {
+        "date": "2025-02-23 15:18:54",
+        "symbol": "AXS/USDT",
+        "signal_type": "AL",
+        "entry_price": 4.267,
+        "exit_price": 4.179,
+        "profit_loss": -2.062338879775019,
+        "confidence": 85,
+        "timeframe": "1h",
+        "indicators": {
+            "rsi": 48.500000000000156,
+            "macd": 0.0049463722027379385,
+            "trend": "Yukar\u0131",
+            "adx": 21.03170858792776
+        },
+        "exit_reason": "Stop Loss tetiklendi"
+    },
+    {
+        "date": "2025-02-23 15:27:41",
+        "symbol": "SOL/USDT",
+        "signal_type": "AL",
+        "entry_price": 171.99,
+        "exit_price": 168.5,
+        "profit_loss": -2.029187743473463,
+        "confidence": 95,
+        "timeframe": "1h",
+        "indicators": {
+            "rsi": 44.137931034482726,
+            "macd": 0.029711661889523455,
+            "trend": "Yukar\u0131",
+            "adx": 27.278198189884588
+        },
+        "exit_reason": "Stop Loss tetiklendi"
+    },
+    {
+        "date": "2025-02-23 15:27:54",
+        "symbol": "SAND/USDT",
+        "signal_type": "AL",
+        "entry_price": 0.35749,
+        "exit_price": 0.34983,
+        "profit_loss": -2.142717278805002,
+        "confidence": 95,
+        "timeframe": "1h",
+        "indicators": {
+            "rsi": 44.063586686537455,
+            "macd": 0.0004777446934785452,
+            "trend": "Yukar\u0131",
+            "adx": 29.961856837408845
+        },
+        "exit_reason": "Stop Loss tetiklendi"
+    },
+    {
+        "date": "2025-02-23 15:51:06",
+        "symbol": "ENJ/USDT",
+        "signal_type": "AL",
+        "entry_price": 0.12348,
+        "exit_price": 0.121,
+        "profit_loss": -2.00842241658569,
+        "confidence": 95,
+        "timeframe": "1h",
+        "indicators": {
+            "rsi": 48.979591836734784,
+            "macd": 1.2316316601416587e-05,
+            "trend": "Yukar\u0131",
+            "adx": 31.467161656668505
+        },
+        "exit_reason": "Stop Loss tetiklendi"
+    }
+]
