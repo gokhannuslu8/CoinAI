@@ -34,16 +34,11 @@ class AdaptiveTrader:
         if not os.path.exists(self.results_dir):
             os.makedirs(self.results_dir)
         
-        # Bugünün tarihiyle dosya adı oluştur
-        self.current_date = datetime.now().strftime('%Y%m%d')
-        self.results_file = f"{self.results_dir}/trades_{self.current_date}.json"
+        # Sabit dosya adı kullan
+        self.results_file = f"{self.results_dir}/trading_history.json"
         
-        # Eğer dosya yoksa boş bir işlem geçmişiyle başlat
-        if not os.path.exists(self.results_file):
-            self.trade_history = []
-            self.save_trade_history()
-        else:
-            self.load_trade_history()
+        # Dosyayı yükle veya oluştur
+        self.load_trade_history()
         
     def prepare_features(self, data):
         """İndikatörlerden özellikler oluştur"""
@@ -212,11 +207,7 @@ class AdaptiveTrader:
         """
         try:
             # Mevcut kayıtları yükle
-            try:
-                with open(self.results_file, 'r') as f:
-                    trades = json.load(f)
-            except:
-                trades = []
+            trades = self.load_trade_history()
             
             # Yeni işlemi ekle
             trades.append({
