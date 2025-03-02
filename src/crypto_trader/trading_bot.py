@@ -110,15 +110,18 @@ class TradingBot:
             if df is None or len(df.index) == 0:
                 return 0, {}
             
+            # Pozisyon durumunu kontrol et
+            self.check_position_status(df, symbol)
+            
             signals = {
-                'RSI': self.analyze_rsi(df) * 2.0,        # 1.5'ten 2.0'ye
-                'MACD': self.analyze_macd(df) * 1.8,      # 1.2'den 1.8'e
-                'BB': self.analyze_bollinger(df) * 1.5,   # Yeni ağırlık
-                'StochRSI': self.analyze_stoch_rsi(df) * 1.8,  # 1.3'ten 1.8'e
-                'Volume': self.analyze_volume(df) * 1.5,   # Yeni ağırlık
-                'Trend': self.analyze_trend(df) * 2.0,     # 1.4'ten 2.0'ye
-                'Volatility': self.analyze_volatility(df) * 1.5,  # Yeni ağırlık
-                'ADX': self.analyze_adx(df) * 1.5          # Yeni ağırlık
+                'RSI': self.analyze_rsi(df) * 2.0,
+                'MACD': self.analyze_macd(df) * 1.8,
+                'BB': self.analyze_bollinger(df) * 1.5,
+                'StochRSI': self.analyze_stoch_rsi(df) * 1.8,
+                'Volume': self.analyze_volume(df) * 1.5,
+                'Trend': self.analyze_trend(df) * 2.0,
+                'Volatility': self.analyze_volatility(df) * 1.5,
+                'ADX': self.analyze_adx(df) * 1.5
             }
             
             total_score = sum(signals.values())
@@ -376,4 +379,99 @@ class TradingBot:
         # Bu metodun içeriği, TradingBot sınıfının içinde olmalıdır
         # Bu örnekte, yeni trade fırsatlarını değerlendirmek için bir metod ekleyeceğiz
         # Bu metodun gerçek işlevi, yeni trade fırsatlarını değerlendirmek için tasarlanmıştır
-        pass 
+        pass
+
+    def check_position_status(self, df, symbol):
+        """
+        Açık pozisyonları kontrol eder
+        """
+        try:
+            if symbol not in self.positions:
+                return
+            
+            position = self.positions[symbol]
+            current_price = df['close'].iloc[-1]
+            entry_price = position['entry_price']
+            
+            # Kar/zarar hesapla
+            if position['type'] == 'LONG':
+                profit_loss = ((current_price - entry_price) / entry_price) * 100
+            else:
+                profit_loss = ((entry_price - current_price) / entry_price) * 100
+            
+            # Stop loss kontrolü
+            if profit_loss <= -position['stop_loss']:
+                self._handle_position_exit(symbol, "Stop Loss", current_price, profit_loss)
+                return
+            
+            # Take profit kontrolü
+            if profit_loss >= position['take_profit']:
+                self._handle_position_exit(symbol, "Take Profit", current_price, profit_loss)
+                return
+            
+            # Trend değişimi kontrolü
+            current_trend = self.determine_trend(df)
+            if (position['type'] == 'LONG' and current_trend == 'Aşağı') or \
+               (position['type'] == 'SHORT' and current_trend == 'Yukarı'):
+                message = f"""⚠️ TREND DEĞİŞİMİ - {symbol}
+                
+Pozisyon: {position['type']}
+Giriş: {entry_price:.4f}
+Mevcut: {current_price:.4f}
+Kar/Zarar: %{profit_loss:.2f}
+
+❗️ Trend tersine döndü, pozisyondan çıkılması önerilir."""
+                
+                self.telegram.send_message(message)
+            
+        except Exception as e:
+            print(f"Pozisyon kontrol hatası: {str(e)}")
+
+    def _handle_position_exit(self, symbol, reason, exit_price, profit_loss):
+        """
+        Pozisyon çıkışını yönetir
+        """
+        try:
+            position = self.positions[symbol]
+            
+            # Sonucu kaydet
+            trade_result = {
+                'symbol': symbol,
+                'entry_price': position['entry_price'],
+                'exit_price': exit_price,
+                'type': position['type'],
+                'profit_loss': profit_loss,
+                'reason': reason,
+                'duration': (datetime.now() - position['entry_time']).total_seconds() / 3600,  # saat
+                'timeframe': position['timeframe']
+            }
+            
+            self.trade_history.append(trade_result)
+            
+            # Bildirimi gönder
+            message = f"""{'🎯' if reason == 'Take Profit' else '🛑'} POZİSYON ÇIKIŞ - {symbol}
+
+İşlem: {position['type']}
+Giriş: {position['entry_price']:.4f}
+Çıkış: {exit_price:.4f}
+{'Kar' if profit_loss > 0 else 'Zarar'}: %{abs(profit_loss):.2f}
+Süre: {trade_result['duration']:.1f} saat
+
+Sebep: {reason}"""
+
+            self.telegram.send_message(message)
+            
+            # İstatistikleri güncelle
+            self.adaptive_trader.add_trade_result(trade_result)
+            
+            # Pozisyonu kaldır
+            del self.positions[symbol]
+            
+            # Her 10 işlemde bir optimizasyon yap
+            if len(self.trade_history) % 10 == 0:
+                self.adaptive_trader.optimize_parameters()
+                analysis = self.adaptive_trader.analyze_trade_history()
+                self.telegram.send_message(f"📊 Performans Analizi\n\n{analysis}")
+            
+        except Exception as e:
+            print(f"Pozisyon çıkış hatası: {str(e)}") 

@@ -285,3 +285,250 @@ class AdaptiveTrader:
                 'max_loss': 0,
                 'success_rate': 0
             } 
+
+    def analyze_trade_history(self):
+        """
+        İşlem geçmişini analiz eder ve iyileştirme önerileri sunar
+        """
+        try:
+            df = pd.DataFrame(self.trade_history)
+            if len(df) < self.min_trades_for_stats:
+                return "Yeterli işlem geçmişi yok"
+            
+            # Genel istatistikler
+            total_trades = len(df)
+            winning_trades = len(df[df['profit_loss'] > 0])
+            success_rate = (winning_trades / total_trades) * 100
+            avg_profit = df[df['profit_loss'] > 0]['profit_loss'].mean()
+            avg_loss = df[df['profit_loss'] <= 0]['profit_loss'].mean()
+            
+            # Zaman bazlı analiz
+            df['entry_date'] = pd.to_datetime(df['entry_date'])
+            df['hour'] = df['entry_date'].dt.hour
+            best_hours = df.groupby('hour')['profit_loss'].mean().sort_values(ascending=False)
+            
+            # İndikatör bazlı analiz
+            rsi_success = df.groupby(pd.cut(df['indicators'].apply(lambda x: x['RSI']), 
+                                          bins=[0,30,40,50,60,70,100]))['profit_loss'].mean()
+            
+            adx_success = df.groupby(pd.cut(df['indicators'].apply(lambda x: x['ADX']), 
+                                          bins=[0,20,25,30,35,100]))['profit_loss'].mean()
+            
+            # İyileştirme önerileri
+            recommendations = []
+            
+            if success_rate < 50:
+                recommendations.append("⚠️ Başarı oranı düşük. Sinyal filtrelerini sıkılaştırın.")
+            
+            if avg_loss < -2.5:
+                recommendations.append("🛑 Ortalama kayıp yüksek. Stop-loss seviyelerini daraltın.")
+            
+            best_hour = best_hours.index[0]
+            if best_hours.iloc[0] > best_hours.mean() * 1.5:
+                recommendations.append(f"⏰ En karlı işlem saati: {best_hour}:00")
+            
+            # RSI önerileri
+            best_rsi_range = rsi_success.idxmax()
+            recommendations.append(f"📊 En başarılı RSI aralığı: {best_rsi_range}")
+            
+            # ADX önerileri
+            best_adx_range = adx_success.idxmax()
+            recommendations.append(f"📈 En başarılı ADX aralığı: {best_adx_range}")
+            
+            # Sonuçları formatla
+            analysis = f"""📊 İşlem Analizi ({total_trades} işlem)
+
+💰 Genel Performans:
+• Başarı Oranı: %{success_rate:.1f}
+• Ortalama Kar: %{avg_profit:.2f}
+• Ortalama Zarar: %{avg_loss:.2f}
+
+⚡️ En İyi Performans:
+• Saat: {best_hour}:00 (%{best_hours.iloc[0]:.2f})
+• RSI: {best_rsi_range} (%{rsi_success.max():.2f})
+• ADX: {best_adx_range} (%{adx_success.max():.2f})
+
+🔄 İyileştirme Önerileri:
+""" + "\n".join(f"• {r}" for r in recommendations)
+
+            return analysis
+            
+        except Exception as e:
+            print(f"Analiz hatası: {str(e)}")
+            return "Analiz yapılamadı"
+
+    def optimize_parameters(self):
+        """
+        İşlem sonuçlarına göre parametreleri optimize eder
+        """
+        try:
+            df = pd.DataFrame(self.trade_history)
+            if len(df) < self.min_trades_for_stats:
+                return
+            
+            # RSI optimizasyonu
+            rsi_ranges = df.groupby(pd.cut(df['indicators'].apply(lambda x: x['RSI']), 
+                                        bins=[0,30,35,40,45,50,55,60,65,70,100]))['profit_loss'].mean()
+            best_rsi_range = rsi_ranges.idxmax()
+            
+            # ADX optimizasyonu
+            adx_ranges = df.groupby(pd.cut(df['indicators'].apply(lambda x: x['ADX']), 
+                                        bins=[0,15,20,25,30,35,40,100]))['profit_loss'].mean()
+            best_adx_range = adx_ranges.idxmax()
+            
+            # Stop loss optimizasyonu
+            if df['profit_loss'].min() < -3:
+                self.stop_loss_percent = 0.015  # Daha sıkı stop-loss
+            elif df['profit_loss'].std() > 4:
+                self.stop_loss_percent = 0.025  # Daha geniş stop-loss
+            
+            # Take profit optimizasyonu
+            avg_profit = df[df['profit_loss'] > 0]['profit_loss'].mean()
+            if avg_profit > 5:
+                self.take_profit_percent = avg_profit * 0.8  # Hedefi yükselt
+            elif avg_profit < 2:
+                self.take_profit_percent = 0.03  # Hedefi düşür
+            
+            # Sonuçları kaydet
+            self.optimized_params = {
+                'best_rsi_range': best_rsi_range,
+                'best_adx_range': best_adx_range,
+                'stop_loss': self.stop_loss_percent,
+                'take_profit': self.take_profit_percent,
+                'last_update': datetime.now()
+            }
+            
+            print(f"\n=== Parametre Optimizasyonu ===")
+            print(f"RSI Aralığı: {best_rsi_range}")
+            print(f"ADX Aralığı: {best_adx_range}")
+            print(f"Stop Loss: %{self.stop_loss_percent*100:.1f}")
+            print(f"Take Profit: %{self.take_profit_percent*100:.1f}")
+            
+        except Exception as e:
+            print(f"Optimizasyon hatası: {str(e)}") 
+
+    def analyze_patterns(self):
+        """
+        İşlem geçmişindeki başarılı ve başarısız pattern'leri analiz eder
+        """
+        try:
+            df = pd.DataFrame(self.trade_history)
+            if len(df) < self.min_trades_for_stats:
+                return None
+            
+            # Pattern analizi
+            patterns = {
+                'time_patterns': self._analyze_time_patterns(df),
+                'indicator_patterns': self._analyze_indicator_patterns(df),
+                'price_patterns': self._analyze_price_patterns(df),
+                'volume_patterns': self._analyze_volume_patterns(df)
+            }
+            
+            # Başarılı pattern'leri belirle
+            successful_patterns = self._identify_successful_patterns(patterns)
+            
+            return successful_patterns
+            
+        except Exception as e:
+            print(f"Pattern analizi hatası: {str(e)}")
+            return None
+
+    def _analyze_time_patterns(self, df):
+        """
+        Zaman bazlı pattern'leri analiz eder
+        """
+        df['hour'] = pd.to_datetime(df['entry_date']).dt.hour
+        df['day_of_week'] = pd.to_datetime(df['entry_date']).dt.dayofweek
+        
+        time_patterns = {
+            'best_hours': df.groupby('hour')['profit_loss'].mean().sort_values(ascending=False).head(),
+            'best_days': df.groupby('day_of_week')['profit_loss'].mean().sort_values(ascending=False),
+            'hour_success_rate': df.groupby('hour')['profit_loss'].apply(lambda x: (x > 0).mean() * 100)
+        }
+        
+        return time_patterns
+
+    def _analyze_indicator_patterns(self, df):
+        """
+        İndikatör bazlı pattern'leri analiz eder
+        """
+        indicator_patterns = {}
+        
+        # RSI analizi
+        rsi_ranges = pd.cut(df['indicators'].apply(lambda x: x['RSI']), 
+                           bins=[0,30,40,50,60,70,100])
+        indicator_patterns['rsi_success'] = df.groupby(rsi_ranges)['profit_loss'].agg([
+            'mean',
+            'count',
+            'std',
+            lambda x: (x > 0).mean() * 100  # Başarı oranı
+        ])
+        
+        # ADX analizi
+        adx_ranges = pd.cut(df['indicators'].apply(lambda x: x['ADX']),
+                           bins=[0,20,25,30,40,100])
+        indicator_patterns['adx_success'] = df.groupby(adx_ranges)['profit_loss'].agg([
+            'mean',
+            'count',
+            'std',
+            lambda x: (x > 0).mean() * 100
+        ])
+        
+        return indicator_patterns
+
+    def _analyze_price_patterns(self, df):
+        """
+        Fiyat pattern'lerini analiz eder
+        """
+        price_patterns = {}
+        
+        # Trend yönü başarı oranı
+        price_patterns['trend_success'] = df.groupby(
+            df['indicators'].apply(lambda x: x.get('trend', 'Unknown'))
+        )['profit_loss'].agg(['mean', 'count', lambda x: (x > 0).mean() * 100])
+        
+        return price_patterns
+
+    def _analyze_volume_patterns(self, df):
+        """
+        Hacim pattern'lerini analiz eder
+        """
+        volume_patterns = {}
+        
+        # Hacim artış/azalış başarı oranı
+        volume_patterns['volume_change_success'] = df.groupby(
+            pd.cut(df['indicators'].apply(lambda x: x.get('volume_change', 0)),
+                   bins=[-np.inf, -0.5, 0, 0.5, np.inf])
+        )['profit_loss'].agg(['mean', 'count', lambda x: (x > 0).mean() * 100])
+        
+        return volume_patterns
+
+    def _identify_successful_patterns(self, patterns):
+        """
+        En başarılı pattern'leri belirler
+        """
+        successful = {
+            'time': {
+                'best_hours': patterns['time_patterns']['best_hours'].index[
+                    patterns['time_patterns']['best_hours'] > 0
+                ].tolist(),
+                'best_days': patterns['time_patterns']['best_days'].index[
+                    patterns['time_patterns']['best_days'] > 0
+                ].tolist()
+            },
+            'indicators': {
+                'rsi_ranges': patterns['indicator_patterns']['rsi_success'][
+                    patterns['indicator_patterns']['rsi_success']['mean'] > 0
+                ].index.tolist(),
+                'adx_ranges': patterns['indicator_patterns']['adx_success'][
+                    patterns['indicator_patterns']['adx_success']['mean'] > 0
+                ].index.tolist()
+            },
+            'trend': {
+                'successful_trends': patterns['price_patterns']['trend_success'][
+                    patterns['price_patterns']['trend_success']['mean'] > 0
+                ].index.tolist()
+            }
+        }
+        
+        return successful 
