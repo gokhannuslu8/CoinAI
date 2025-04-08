@@ -17,6 +17,21 @@ class SignalGenerator:
         
     def analyze_signals(self, df, symbol, timeframe):
         try:
+            # Eğer coin zaten aktif işlemde ise, sadece pozisyon takibi yap
+            if symbol in self.active_trades:
+                self.check_position_status(df, symbol)
+                return None
+            
+            # Son sinyal kontrolü - aynı coin için tekrar sinyal üretmeyi engelle
+            current_time = datetime.now().timestamp()
+            if symbol in self.last_signals:
+                last_signal = self.last_signals[symbol]
+                time_diff = current_time - last_signal['timestamp']
+                
+                # Son 4 saat içinde sinyal verildiyse tekrar verme
+                if time_diff < 4 * 3600:  # 4 saat
+                    return None
+
             # Mevcut değerler
             current_price = df['close'].iloc[-1]
             current_rsi = df['RSI'].iloc[-1]
@@ -38,46 +53,6 @@ class SignalGenerator:
                 'adx': current_adx,
                 'volume': volume_data
             }
-            
-            # Aktif trade kontrolü
-            if symbol in self.active_trades:
-                entry_data = self.active_trades[symbol]
-                entry_price = entry_data['price']
-                
-                # Kar/zarar hesapla
-                profit_loss = ((current_price - entry_price) / entry_price) * 100
-                
-                # Stop loss kontrolünü daha sık yap (her mum için)
-                stop_level = entry_data.get('stop_loss', entry_price * 0.98)  # %2 varsayılan
-                
-                if current_price <= stop_level:
-                    exit_data = {
-                        'timestamp': datetime.now(),
-                        'price': current_price,
-                        'reason': "Stop Loss tetiklendi",
-                        'profit_loss': profit_loss
-                    }
-                    
-                    # Stop loss bildirimi
-                    self.telegram.send_message(f"""🚫 STOP LOSS - {symbol.replace('/USDT', '')}
-
-İşlem: {'LONG' if entry_data['signal'] == 'AL' else 'SHORT'}
-Giriş: {entry_price:.4f}
-Çıkış: {current_price:.4f}
-Zarar: %{abs(profit_loss):.2f}
-
-⚠️ Stop Loss seviyesi tetiklendi!""")
-                    
-                    self.record_signal_result(entry_data, exit_data)
-                    del self.active_trades[symbol]
-                    return None
-
-            # Son sinyal zamanını kontrol et
-            current_time = datetime.now().timestamp()
-            if symbol in self.last_signal_times:
-                time_since_last_signal = (current_time - self.last_signal_times[symbol]) / 60
-                if time_since_last_signal < 30:  # 30 dakikaya düşürdük
-                    return None
             
             # Temel indikatörler
             df['RSI'] = self.calculate_rsi(df)
@@ -184,6 +159,28 @@ Kar Al 3: %8.0 ({current_price * 1.08:.4f})"""
                     "price": current_price,
                     "confidence": confidence,
                     "indicators": indicators
+                }
+                
+                # Son sinyali kaydet
+                self.last_signals[symbol] = {
+                    'timestamp': current_time,
+                    'signal': signal_type,
+                    'price': current_price
+                }
+                
+                # Aktif işlemlere ekle
+                self.active_trades[symbol] = {
+                    'entry_price': current_price,
+                    'signal': signal_type,
+                    'entry_time': datetime.now(),
+                    'timeframe': timeframe,
+                    'stop_loss': current_price * 0.97,  # %3 stop
+                    'take_profit1': current_price * 1.02,  # %2 kar
+                    'take_profit2': current_price * 1.035,  # %3.5 kar
+                    'take_profit3': current_price * 1.05,  # %5 kar
+                    'tp1_hit': False,
+                    'tp2_hit': False,
+                    'tp3_hit': False
                 }
                 
                 return signal_data
@@ -309,59 +306,92 @@ Benzer Pattern Başarısı: %{stats['pattern_success']:.1f}
             return "Belirsiz"
 
     def calculate_confidence_score(self, df, current_price, indicators):
-        """
-        Gerçek güven skoru hesaplar
-        """
         try:
             confidence = 0
             conditions_met = 0
             
-            # 1. Trend ve EMA Dizilimi (%30)
-            if indicators['trend'] == "Yukarı":
-                last_close = df['close'].iloc[-1]
-                if 'EMA_20' in df.columns and 'EMA_50' in df.columns:
-                    if last_close > df['EMA_20'].iloc[-1] > df['EMA_50'].iloc[-1]:
-                        confidence += 30
-                        conditions_met += 1
-                    elif last_close > df['EMA_20'].iloc[-1]:
-                        confidence += 15
+            # 1. Volatilite Kontrolü (%20)
+            atr = self.calculate_atr(df)
+            volatility = (atr / current_price) * 100
             
-            # 2. RSI + MACD Kombinasyonu (%25)
-            rsi = indicators['rsi']
-            if 40 <= rsi <= 60:
-                if indicators['macd'] > 0 and df['MACD_Hist'].iloc[-1] > df['MACD_Hist'].iloc[-2]:
-                    confidence += 25
-                    conditions_met += 1
-            
-            # 3. ADX Trend Gücü (%20)
-            if indicators['adx'] > 25:
+            if volatility <= 3:  # %3'ten düşük volatilite
                 confidence += 20
                 conditions_met += 1
+            elif volatility > 5:  # Çok yüksek volatilite
+                return 0  # Çok volatil piyasada işlem yapma
             
-            # 4. Hacim Analizi (%15)
-            avg_volume = df['volume'].rolling(20).mean().iloc[-1]
-            if df['volume'].iloc[-1] > avg_volume:
-                confidence += 15
+            # 2. Trend ve Momentum (%30)
+            if indicators['trend'] == "Yukarı":
+                # Son 3 mumun yönü
+                last_3_candles = df.tail(3)
+                if all(last_3_candles['close'] > last_3_candles['open']):
+                    confidence += 30
+                    conditions_met += 1
+                
+                # MACD kontrolü
+                if df['MACD_Hist'].iloc[-1] > 0 and df['MACD_Hist'].iloc[-1] > df['MACD_Hist'].iloc[-2]:
+                    confidence += 10
+            
+            # 3. Destek/Direnç Analizi (%25)
+            support_levels = self.find_support_levels(df)
+            nearest_support = min([abs(level - current_price) for level in support_levels])
+            
+            # Destek seviyesine yakınlık
+            distance_to_support = (nearest_support / current_price) * 100
+            if 0.5 <= distance_to_support <= 2:  # Destekten %0.5-%2 uzaklıkta
+                confidence += 25
                 conditions_met += 1
             
-            # 5. Bollinger Bantları (%10)
-            if df['close'].iloc[-1] > df['BB_middle'].iloc[-1]:
-                confidence += 10
+            # 4. Hacim Analizi (%25)
+            volume_ma = df['volume'].rolling(20).mean()
+            volume_trend = all(df['volume'].tail(3) > volume_ma.tail(3))
+            
+            if volume_trend and df['volume'].iloc[-1] > volume_ma.iloc[-1] * 1.5:
+                confidence += 25
                 conditions_met += 1
-
-            # Koşulları karşılama durumuna göre bonus
-            if conditions_met >= 5:  # Tüm koşullar sağlandı
-                return 100
-            elif conditions_met == 4:  # 4 koşul sağlandı
-                return min(95, confidence + 10)
-            elif conditions_met == 3:  # 3 koşul sağlandı
-                return min(85, confidence)
-            else:
-                return min(70, confidence)  # 2 veya daha az koşul
+            
+            # En az 3 koşul sağlanmalı ve toplam güven 85'in üzerinde olmalı
+            return confidence if conditions_met >= 3 and confidence >= 85 else 0
             
         except Exception as e:
             print(f"Güven skoru hesaplama hatası: {str(e)}")
-            return 50
+            return 0
+
+    def calculate_atr(self, df, period=14):
+        """Average True Range hesapla"""
+        try:
+            high = df['high']
+            low = df['low']
+            close = df['close']
+            
+            tr1 = abs(high - low)
+            tr2 = abs(high - close.shift())
+            tr3 = abs(low - close.shift())
+            
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            atr = tr.rolling(period).mean()
+            
+            return atr.iloc[-1]
+        except Exception as e:
+            print(f"ATR hesaplama hatası: {str(e)}")
+            return None
+
+    def find_support_levels(self, df, period=20):
+        """Destek seviyelerini bul"""
+        try:
+            support_levels = []
+            
+            # Son period kadar mumu kontrol et
+            for i in range(4, period):
+                if (df['low'].iloc[-i] < df['low'].iloc[-i+1] and 
+                    df['low'].iloc[-i] < df['low'].iloc[-i-1] and
+                    df['low'].iloc[-i] < df['low'].iloc[-i+2]):
+                    support_levels.append(df['low'].iloc[-i])
+            
+            return support_levels
+        except Exception as e:
+            print(f"Destek seviyesi hesaplama hatası: {str(e)}")
+            return []
 
     def calculate_sat_confidence_score(self, df, current_price, indicators):
         """
@@ -417,349 +447,6 @@ Benzer Pattern Başarısı: %{stats['pattern_success']:.1f}
         except Exception as e:
             print(f"SAT güven skoru hesaplama hatası: {str(e)}")
             return 50
-
-    def find_support_levels(self, df, window=20):
-        """
-        Destek seviyelerini bulur
-        """
-        try:
-            levels = []
-            for i in range(window, len(df)-window):
-                if self.is_support(df, i):
-                    levels.append(df['low'].iloc[i])
-            return levels
-        except Exception as e:
-            print(f"Destek seviyesi hesaplama hatası: {str(e)}")
-            return []
-
-    def find_resistance_levels(self, df, window=20):
-        """
-        Direnç seviyelerini bulur
-        """
-        try:
-            levels = []
-            for i in range(window, len(df)-window):
-                if self.is_resistance(df, i):
-                    levels.append(df['high'].iloc[i])
-            return levels
-        except Exception as e:
-            print(f"Direnç seviyesi hesaplama hatası: {str(e)}")
-            return []
-
-    def is_support(self, df, i):
-        """Destek noktası kontrolü"""
-        return (df['low'].iloc[i] < df['low'].iloc[i-1] and 
-                df['low'].iloc[i] < df['low'].iloc[i+1] and
-                df['low'].iloc[i+1] < df['low'].iloc[i+2] and
-                df['low'].iloc[i-1] < df['low'].iloc[i-2])
-
-    def is_resistance(self, df, i):
-        """Direnç noktası kontrolü"""
-        return (df['high'].iloc[i] > df['high'].iloc[i-1] and 
-                df['high'].iloc[i] > df['high'].iloc[i+1] and
-                df['high'].iloc[i+1] > df['high'].iloc[i+2] and
-                df['high'].iloc[i-1] > df['high'].iloc[i-2])
-
-    def calculate_rsi(self, df):
-        """
-        RSI (Relative Strength Index) hesaplama
-        """
-        try:
-            # Fiyat değişimlerini hesapla
-            delta = df['close'].diff()
-            
-            # Pozitif ve negatif değişimleri ayır
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            
-            # RS ve RSI hesapla
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            
-            return rsi
-            
-        except Exception as e:
-            print(f"RSI hesaplama hatası: {str(e)}")
-            return pd.Series(index=df.index)  # Boş seri döndür
-
-    def calculate_macd(self, df):
-        """
-        MACD hesaplama
-        """
-        try:
-            # MACD hesaplama
-            exp1 = df['close'].ewm(span=12, adjust=False).mean()
-            exp2 = df['close'].ewm(span=26, adjust=False).mean()
-            macd = exp1 - exp2
-            signal = macd.ewm(span=9, adjust=False).mean()
-            hist = macd - signal
-            
-            return macd, signal, hist
-            
-        except Exception as e:
-            print(f"MACD hesaplama hatası: {str(e)}")
-            return None, None, None
-
-    def calculate_bollinger_bands(self, df):
-        """
-        Bollinger Bands hesaplama
-        """
-        try:
-            # Orta bant (20 günlük SMA)
-            middle_band = df['close'].rolling(window=20).mean()
-            
-            # Standart sapma
-            std = df['close'].rolling(window=20).std()
-            
-            # Üst ve alt bantlar
-            upper_band = middle_band + (std * 2)
-            lower_band = middle_band - (std * 2)
-            
-            return upper_band, middle_band, lower_band
-            
-        except Exception as e:
-            print(f"Bollinger Bands hesaplama hatası: {str(e)}")
-            return pd.Series(index=df.index), pd.Series(index=df.index), pd.Series(index=df.index)
-
-    def calculate_adx(self, df):
-        """
-        ADX (Average Directional Index) hesaplama
-        """
-        try:
-            # +DM ve -DM hesaplama
-            high_diff = df['high'].diff()
-            low_diff = df['low'].diff()
-            
-            pos_dm = high_diff.where((high_diff > 0) & (high_diff > low_diff.abs()), 0)
-            neg_dm = low_diff.abs().where((low_diff < 0) & (low_diff.abs() > high_diff), 0)
-            
-            # True Range hesaplama
-            high_low = df['high'] - df['low']
-            high_close = (df['high'] - df['close'].shift()).abs()
-            low_close = (df['low'] - df['close'].shift()).abs()
-            true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-            
-            # TR14, +DI14, -DI14 hesaplama
-            tr14 = true_range.rolling(window=14).sum()
-            pos_di14 = 100 * (pos_dm.rolling(window=14).sum() / tr14)
-            neg_di14 = 100 * (neg_dm.rolling(window=14).sum() / tr14)
-            
-            # DX ve ADX hesaplama
-            dx = 100 * ((pos_di14 - neg_di14).abs() / (pos_di14 + neg_di14))
-            adx = dx.rolling(window=14).mean()
-            
-            return adx
-            
-        except Exception as e:
-            print(f"ADX hesaplama hatası: {str(e)}")
-            return pd.Series(index=df.index)
-
-    def get_bb_position(self, price, upper_band, lower_band):
-        # BB pozisyonu hesaplama işlemi
-        # Bu işlemi gerçekleştirmek için gerekli kodu buraya ekleyin
-        # Bu örnekte, BB pozisyonu hesaplama işlemi için basit bir mantık kullanılmıştır
-        if price < lower_band:
-            return "Altında"
-        elif price > upper_band:
-            return "Üstünde"
-        else:
-            return "Ortasında"
-
-    def on_trade_complete(self, symbol, entry_signal, success):
-        """
-        İşlem tamamlandığında sonucu kaydet
-        """
-        if symbol in self.last_signals:
-            pattern = self.last_signals[symbol]['indicators']
-            self.adaptive_trader.record_trade_result(symbol, pattern, success)
-
-    def check_exit_signals(self, df, entry_data):
-        """
-        Pozisyon çıkış kontrolü
-        """
-        try:
-            entry_price = entry_data['price']
-            current_price = df['close'].iloc[-1]
-            entry_signal = entry_data['signal']
-            
-            # Kar/zarar hesapla
-            if entry_signal == "AL":
-                profit_loss = ((current_price - entry_price) / entry_price) * 100
-            else:
-                profit_loss = ((entry_price - current_price) / entry_price) * 100
-            
-            # Dinamik hedefleri kontrol et
-            if 'targets' not in entry_data:
-                entry_data['targets'] = self.calculate_dynamic_targets(df, entry_price, entry_data['symbol'])
-            
-            targets = entry_data['targets']
-            
-            # Stop loss kontrolü
-            stop_level = entry_data.get('stop_loss', entry_price * (1 - targets['initial_stop']/100))
-            if (entry_signal == "AL" and current_price <= stop_level) or \
-               (entry_signal == "SAT" and current_price >= stop_level):
-                return True, current_price, f"Stop Loss tetiklendi (-%{targets['initial_stop']})"
-            
-            # Kar Al hedefleri kontrolü
-            if entry_signal == "AL":
-                # 3. Hedef
-                if profit_loss >= targets['tp3']:
-                    return True, current_price, f"Kar Al 3 (%{targets['tp3']}) hedefine ulaşıldı"
-                
-                # 2. Hedef
-                elif profit_loss >= targets['tp2'] and not entry_data.get('tp2_triggered'):
-                    entry_data['tp2_triggered'] = True
-                    entry_data['stop_loss'] = entry_price * (1 + targets['sl2']/100)
-                    self.telegram.send_message(f"""🎯 KAR AL 2 - {entry_data['symbol'].replace('/USDT', '')}
-Kar: %{profit_loss:.2f}
-Stop Loss %{targets['sl2']}'e güncellendi""")
-                
-                # 1. Hedef
-                elif profit_loss >= targets['tp1'] and not entry_data.get('tp1_triggered'):
-                    entry_data['tp1_triggered'] = True
-                    entry_data['stop_loss'] = entry_price * (1 + targets['sl1']/100)
-                    self.telegram.send_message(f"""🎯 KAR AL 1 - {entry_data['symbol'].replace('/USDT', '')}
-Kar: %{profit_loss:.2f}
-Stop Loss %{targets['sl1']}'e güncellendi""")
-            
-            # Trend zayıflama kontrolü
-            if self.is_trend_weakening(df, entry_signal):
-                return True, current_price, "Trend zayıflaması tespit edildi"
-            
-            return False, current_price, None
-            
-        except Exception as e:
-            print(f"Çıkış sinyali kontrolü hatası: {str(e)}")
-            return False, None, None
-
-    def calculate_trailing_stop(self, current_profit, highest_price=None, lowest_price=None, 
-                              current_price=None, adx=None, position="LONG"):
-        """
-        Dinamik trailing stop hesaplama
-        """
-        if position == "LONG":
-            # Kar yüzdesine göre trailing stop mesafesi
-            if current_profit < 3.0:
-                trail_percentage = 1.0  # %1 trailing stop
-            elif current_profit < 5.0:
-                trail_percentage = 1.5  # %1.5 trailing stop
-            elif current_profit < 10.0:
-                trail_percentage = 2.0  # %2 trailing stop
-            else:
-                trail_percentage = 2.5  # %2.5 trailing stop
-            
-            # ADX'e göre trailing stop'u ayarla
-            if adx > 30:  # Güçlü trend
-                trail_percentage *= 1.2  # Biraz daha fazla boşluk ver
-            
-            return highest_price * (1 - trail_percentage/100)
-        
-        else:  # SHORT pozisyon
-            if current_profit < 3.0:
-                trail_percentage = 1.0
-            elif current_profit < 5.0:
-                trail_percentage = 1.5
-            elif current_profit < 10.0:
-                trail_percentage = 2.0
-            else:
-                trail_percentage = 2.5
-            
-            if adx > 30:
-                trail_percentage *= 1.2
-            
-            return lowest_price * (1 + trail_percentage/100)
-
-    def detect_trend_weakness(self, rsi, macd, macd_signal, adx, df, position="LONG"):
-        """
-        Trend zayıflama belirtilerini tespit et
-        """
-        weakness_points = 0
-        
-        if position == "LONG":
-            # RSI aşırı alım ve düşüş
-            if rsi > 70 and rsi < df['RSI'].iloc[-2]:
-                weakness_points += 1
-            
-            # MACD zayıflama
-            if macd < macd_signal and macd < df['MACD'].iloc[-2]:
-                weakness_points += 1
-            
-            # ADX zayıflama
-            if adx < 20 or (adx < df['ADX'].iloc[-2] and adx < df['ADX'].iloc[-3]):
-                weakness_points += 1
-            
-            # Fiyat momentum kaybı
-            if df['close'].iloc[-1] < df['close'].iloc[-2] < df['close'].iloc[-3]:
-                weakness_points += 1
-            
-        else:  # SHORT pozisyon
-            # RSI aşırı satım ve yükseliş
-            if rsi < 30 and rsi > df['RSI'].iloc[-2]:
-                weakness_points += 1
-            
-            # MACD zayıflama
-            if macd > macd_signal and macd > df['MACD'].iloc[-2]:
-                weakness_points += 1
-            
-            # ADX zayıflama
-            if adx < 20 or (adx < df['ADX'].iloc[-2] and adx < df['ADX'].iloc[-3]):
-                weakness_points += 1
-            
-            # Fiyat momentum kaybı
-            if df['close'].iloc[-1] > df['close'].iloc[-2] > df['close'].iloc[-3]:
-                weakness_points += 1
-            
-        return weakness_points >= 2  # En az 2 zayıflama belirtisi varsa True 
-
-    def send_position_update(self, symbol, current_price, current_profit, trailing_stop, trend_status):
-        """
-        Pozisyon güncellemelerini bildir
-        """
-        message = f"""📊 POZİSYON GÜNCELLEMESİ - {symbol}
-
-💵 Mevcut Fiyat: {current_price:.3f}
-📈 Kar/Zarar: %{current_profit:.2f}
-🛡️ Trailing Stop: {trailing_stop:.3f}
-
-⚡ Trend Durumu:
-{trend_status}
-"""
-        self.telegram.send_message(message)
-
-    def get_trend_status(self, rsi, macd, adx, df):
-        if adx > 35:
-            return "Çok Güçlü Trend"
-        elif adx > 25:
-            return "Güçlü Trend"
-        else:
-            return "Normal Trend"
-
-    def analyze_volume_patterns(self, df):
-        """
-        Hacim paternlerini analiz eder
-        """
-        volume = df['volume']
-        close = df['close']
-        
-        # Hacim ortalamaları
-        vol_sma20 = volume.rolling(20).mean()
-        vol_sma5 = volume.rolling(5).mean()
-        
-        # Hacim artışı kontrolü
-        volume_surge = volume.iloc[-1] > vol_sma20.iloc[-1] * 1.5
-        
-        # Fiyat-Hacim uyumu
-        price_up = close.iloc[-1] > close.iloc[-2]
-        volume_up = volume.iloc[-1] > volume.iloc[-2]
-        
-        # Hacim teyidi
-        volume_confirms = (price_up and volume_up) or (not price_up and not volume_up)
-        
-        return {
-            'volume_surge': volume_surge,
-            'volume_confirms': volume_confirms,
-            'avg_volume_ratio': volume.iloc[-1] / vol_sma20.iloc[-1]
-        }
 
     def find_support_resistance(self, df, period=20):
         """
@@ -1072,59 +759,64 @@ Timeframe: {entry_data['timeframe']}
             if symbol not in self.active_trades:
                 return
             
-            entry_data = self.active_trades[symbol]
-            entry_price = entry_data['price']
+            position = self.active_trades[symbol]
             current_price = df['close'].iloc[-1]
+            entry_price = position['entry_price']  # 'price' yerine 'entry_price' kullanıyoruz
+            signal_type = position['signal']
             
             # Kar/zarar hesapla
-            profit_loss = ((current_price - entry_price) / entry_price) * 100
-            
-            # Stop loss kontrolü
-            stop_level = entry_price * 0.98  # %2 stop loss
-            if current_price <= stop_level:
-                message = f"""🚫 STOP LOSS - {symbol}
+            if signal_type == "AL":
+                profit_loss = ((current_price - entry_price) / entry_price) * 100
+                
+                # Stop loss kontrolü
+                if current_price <= position['stop_loss']:
+                    message = f"""🚫 STOP LOSS - {symbol}
 
 Giriş: {entry_price:.4f}
 Çıkış: {current_price:.4f}
 Zarar: %{abs(profit_loss):.2f}
 
 Stop Loss seviyesi tetiklendi!"""
-                
-                self.telegram.send_message(message)
-                
-                # İşlemi kaydet
-                trade_result = {
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "symbol": symbol,
-                    "signal_type": entry_data['signal'],
-                    "entry_price": entry_price,
-                    "exit_price": current_price,
-                    "profit_loss": profit_loss,
-                    "confidence": entry_data.get('confidence', 0),
-                    "timeframe": entry_data.get('timeframe', '1h'),
-                    "indicators": entry_data.get('indicators', {}),
-                    "exit_reason": "Stop Loss tetiklendi"
-                }
-                
-                # JSON dosyasına kaydet
-                self._save_trade_result(trade_result)
-                
-                # Pozisyonu kapat
-                del self.active_trades[symbol]
-                return
-            
-            # Trend değişimi kontrolü
-            if self._check_trend_reversal(df):
-                message = f"""⚠️ TREND DEĞİŞİMİ - {symbol}
+                    
+                    self.telegram.send_message(message)
+                    del self.active_trades[symbol]
+                    return
+                    
+                # Kar hedefleri kontrolü
+                if current_price >= position['take_profit1'] and not position['tp1_hit']:
+                    message = f"""✅ KAR HEDEFİ 1 - {symbol}
 
 Giriş: {entry_price:.4f}
 Mevcut: {current_price:.4f}
-Kar/Zarar: %{profit_loss:.2f}
+Kar: %{profit_loss:.2f}
 
-Trend tersine döndü, pozisyondan çıkılması önerilir."""
+Stop-Loss seviyesi break-even'a çekildi."""
+                    
+                    self.telegram.send_message(message)
+                    position['tp1_hit'] = True
+                    position['stop_loss'] = entry_price  # Stop-loss'u giriş fiyatına çek
+                    
+                # Diğer kar hedefleri...
                 
-                self.telegram.send_message(message)
-            
+            else:  # SAT pozisyonu için
+                profit_loss = ((entry_price - current_price) / entry_price) * 100
+                
+                # Stop loss kontrolü
+                if current_price >= position['stop_loss']:
+                    message = f"""🚫 STOP LOSS - {symbol}
+
+Giriş: {entry_price:.4f}
+Çıkış: {current_price:.4f}
+Zarar: %{abs(profit_loss):.2f}
+
+Stop Loss seviyesi tetiklendi!"""
+                    
+                    self.telegram.send_message(message)
+                    del self.active_trades[symbol]
+                    return
+                    
+                # Kar hedefleri kontrolü...
+                
         except Exception as e:
             print(f"Pozisyon kontrol hatası: {str(e)}")
 
@@ -1197,3 +889,119 @@ Kar/Zarar: %{profit_loss:.2f}
         
         self.record_signal_result(entry_data, exit_data)
         del self.active_trades[symbol] 
+
+    def calculate_rsi(self, df, period=14):
+        """
+        RSI (Relative Strength Index) hesaplar
+        """
+        try:
+            # Fiyat değişimlerini hesapla
+            delta = df['close'].diff()
+            
+            # Pozitif ve negatif değişimleri ayır
+            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+            
+            # RS = Ortalama Kazanç / Ortalama Kayıp
+            rs = gain / loss
+            
+            # RSI = 100 - (100 / (1 + RS))
+            rsi = 100 - (100 / (1 + rs))
+            
+            return rsi
+            
+        except Exception as e:
+            print(f"RSI hesaplama hatası: {str(e)}")
+            return pd.Series([50] * len(df))  # Hata durumunda nötr değer döndür 
+
+    def calculate_macd(self, df, fast=12, slow=26, signal=9):
+        """
+        MACD (Moving Average Convergence Divergence) hesaplar
+        """
+        try:
+            # Hızlı ve yavaş EMA hesapla
+            exp1 = df['close'].ewm(span=fast, adjust=False).mean()
+            exp2 = df['close'].ewm(span=slow, adjust=False).mean()
+            
+            # MACD çizgisi
+            macd = exp1 - exp2
+            
+            # Sinyal çizgisi
+            signal_line = macd.ewm(span=signal, adjust=False).mean()
+            
+            # Histogram
+            histogram = macd - signal_line
+            
+            return macd, signal_line, histogram
+            
+        except Exception as e:
+            print(f"MACD hesaplama hatası: {str(e)}")
+            # Hata durumunda sıfır serisi döndür
+            zeros = pd.Series([0] * len(df))
+            return zeros, zeros, zeros 
+
+    def calculate_adx(self, df, period=14):
+        """
+        ADX (Average Directional Index) hesaplar
+        """
+        try:
+            # True Range hesapla
+            df['TR'] = pd.DataFrame([
+                df['high'] - df['low'],
+                abs(df['high'] - df['close'].shift(1)),
+                abs(df['low'] - df['close'].shift(1))
+            ]).max()
+            
+            # +DM ve -DM hesapla
+            df['HD'] = df['high'] - df['high'].shift(1)
+            df['LD'] = df['low'].shift(1) - df['low']
+            
+            df['+DM'] = ((df['HD'] > df['LD']) & (df['HD'] > 0)) * df['HD']
+            df['-DM'] = ((df['LD'] > df['HD']) & (df['LD'] > 0)) * df['LD']
+            
+            # ATR hesapla
+            df['ATR'] = df['TR'].ewm(span=period, adjust=False).mean()
+            
+            # +DI ve -DI hesapla
+            df['+DI'] = 100 * df['+DM'].ewm(span=period, adjust=False).mean() / df['ATR']
+            df['-DI'] = 100 * df['-DM'].ewm(span=period, adjust=False).mean() / df['ATR']
+            
+            # DX ve ADX hesapla
+            df['DX'] = 100 * abs(df['+DI'] - df['-DI']) / (df['+DI'] + df['-DI'])
+            adx = df['DX'].ewm(span=period, adjust=False).mean()
+            
+            # Geçici sütunları temizle
+            df.drop(['TR', 'HD', 'LD', '+DM', '-DM', 'ATR', '+DI', '-DI', 'DX'], axis=1, inplace=True)
+            
+            return adx
+            
+        except Exception as e:
+            print(f"ADX hesaplama hatası: {str(e)}")
+            return pd.Series([20] * len(df))  # Hata durumunda nötr değer döndür 
+
+    def calculate_bollinger_bands(self, df, period=20, std_dev=2):
+        """
+        Bollinger Bands hesaplar
+        """
+        try:
+            # Orta bant (20 periyot SMA)
+            middle_band = df['close'].rolling(window=period).mean()
+            
+            # Standart sapma
+            std = df['close'].rolling(window=period).std()
+            
+            # Üst ve alt bantlar
+            upper_band = middle_band + (std * std_dev)
+            lower_band = middle_band - (std * std_dev)
+            
+            return upper_band, middle_band, lower_band
+            
+        except Exception as e:
+            print(f"Bollinger Bands hesaplama hatası: {str(e)}")
+            # Hata durumunda yaklaşık değerler döndür
+            price = df['close'].iloc[-1]
+            return (
+                pd.Series([price * 1.02] * len(df)),  # Upper band
+                pd.Series([price] * len(df)),         # Middle band
+                pd.Series([price * 0.98] * len(df))   # Lower band
+            ) 
